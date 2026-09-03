@@ -12,14 +12,18 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "get switch lldp neighbors-detail\nexit\n"
+          ".*#": "get switch lldp neighbors-summary\nexit\n"
         timeout: 60
       delegate_to: localhost
       register: lldp_output
 
-    - name: 2. Extrair mapeamento de Porta e Nome do Vizinho LLDP
+    - name: 2. Extrair mapeamento de Porta e Vizinho
       ansible.builtin.set_fact:
-        lldp_pairs: "{{ lldp_output.stdout | regex_findall('Port Name : (port\\d+)[\\s\\S]*?System Name : ([^\\r\\n]+)') }}"
+        lldp_pairs: "{{ lldp_output.stdout | regex_findall('(port\\d+)\\s+.*?\\s+([A-Za-z0-9_\\.-]+)\\s+') }}"
+
+    - name: DEBUG - Exibir pares LLDP encontrados
+      ansible.builtin.debug:
+        var: lldp_pairs
 
     - name: 3. Consultar descricoes atuais das portas
       ansible.builtin.expect:
@@ -45,12 +49,16 @@
           {% endfor %}
           {{ cmds | join('\n') }}
 
+    - name: DEBUG - Exibir comandos que serao enviados
+      ansible.builtin.debug:
+        var: update_commands
+
     - name: 5. Aplicar novas descricoes via SSH
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "{{ update_commands }}\nexit\n"
+          "#": "{{ update_commands }}\nexit\n"
         timeout: 60
       delegate_to: localhost
       when: update_commands | trim != ""
@@ -62,5 +70,5 @@
           {% if update_commands | trim != "" %}
           ✅ Descrições atualizadas no FortiSwitch com sucesso!
           {% else %}
-          ℹ️ Todas as portas com vizinhos LLDP já possuem a descrição "to-<nome>" correta. Nenhuma alteração foi necessária.
+          ℹ️ Nenhuma porta precisou de alteração.
           {% endif %}
