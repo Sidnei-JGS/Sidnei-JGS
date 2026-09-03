@@ -10,6 +10,6 @@
         command: show system status
       register: output
 
-    - name: Exibir o resultado no console do AWX
+    - name: Exibir resultado no console do AWX
       ansible.builtin.debug:
         var: output.stdout_lines
