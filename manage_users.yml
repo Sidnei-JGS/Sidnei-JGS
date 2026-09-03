@@ -1,0 +1,65 @@
+---
+- name: Deletar usuario no FortiSwitch com verificacao
+  hosts: all
+  gather_facts: false
+
+  vars:
+    username_to_delete: "usuario_teste"
+    ssh_port: "{{ ansible_port | default(22) }}"
+
+  tasks:
+    - name: Definir comando para listar usuarios
+      ansible.builtin.set_fact:
+        check_user_commands: |
+          config system admin
+          show
+          end
+          exit
+
+    - name: Verificar se o usuario existe no FortiSwitch
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "{{ check_user_commands }}"
+        timeout: 60
+      delegate_to: localhost
+      register: user_check_output
+
+    - name: Validar existencia do usuario
+      ansible.builtin.set_fact:
+        user_exists: "{{ user_check_output.stdout is search('edit\\s+\"' ~ username_to_delete ~ '\"') or user_check_output.stdout is search('edit\\s+' ~ username_to_delete) }}"
+
+    - name: Exibir status da existencia do usuario
+      ansible.builtin.debug:
+        msg: "Usuário '{{ username_to_delete }}' {{ 'encontrado' if user_exists else 'não encontrado' }} no switch."
+
+    - name: Preparar comandos para deletar usuario
+      ansible.builtin.set_fact:
+        fortiswitch_delete_commands: |
+          config system admin
+          delete {{ username_to_delete }}
+          end
+          exit
+      when: user_exists
+
+    - name: Deletar usuario se ele existir
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "{{ fortiswitch_delete_commands }}"
+        timeout: 60
+      delegate_to: localhost
+      when: user_exists
+      register: delete_output
+
+    - name: Confirmar delecao do usuario
+      ansible.builtin.debug:
+        msg: "✅ Usuário '{{ username_to_delete }}' foi removido com sucesso!"
+      when: user_exists
+
+    - name: Avisar se usuario nao foi encontrado
+      ansible.builtin.debug:
+        msg: "ℹ️ Usuário '{{ username_to_delete }}' não foi encontrado no switch. Nada a deletar."
+      when: not user_exists
