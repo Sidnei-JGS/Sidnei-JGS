@@ -21,31 +21,32 @@
       ansible.builtin.set_fact:
         lldp_pairs: "{{ lldp_output.stdout | regex_findall('(port\\d+)\\s+.*?\\s+([A-Za-z0-9_\\.-]+)\\s+') }}"
 
-    - name: 3. Filtrar apenas vizinhos validos (ignora traco '-')
+    - name: 3. Montar bloco CLI de alteracao de descricoes
       ansible.builtin.set_fact:
-        valid_lldp_ports: >-
-          {% set valid = [] %}
+        cli_commands: >-
+          config switch interface
           {% for pair in lldp_pairs %}
-            {% if pair[1] | trim != '-' and pair[1] | trim != '' %}
-              {% set _ = valid.append({'port': pair[0], 'name': pair[1] | trim}) %}
+            {% set port = pair[0] %}
+            {% set name = pair[1] | trim %}
+            {% if name != '-' and name != '' %}
+          edit {{ port }}
+          set description to-{{ name }}
+          next
             {% endif %}
           {% endfor %}
-          {{ valid | to_json }}
+          end
+          exit
 
-    - name: 4. Aplicar descricao em cada porta interativamente
+    - name: 4. Executar bloco CLI de configuracao de portas
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*SW-201 #": "config switch interface\n"
-          ".*\\(interface\\) #": "edit {{ item.port }}\n"
-          ".*\\({{ item.port }}\\) #": "set description \"to-{{ item.name }}\"\nnext\nend\nexit\n"
-        timeout: 30
+          ".*#": "{{ cli_commands }}\n"
+        timeout: 60
       delegate_to: localhost
-      loop: "{{ valid_lldp_ports | from_json }}"
-      when: (valid_lldp_ports | from_json) | length > 0
       register: apply_desc_output
 
     - name: 5. Exibir resultado do processamento
       ansible.builtin.debug:
-        msg: "✅ Processadas {{ (valid_lldp_ports | from_json) | length }} portas com LLDP ativo no FortiSwitch!"
+        msg: "✅ Bloco de descrições LLDP enviado e gravado com sucesso no FortiSwitch!"
