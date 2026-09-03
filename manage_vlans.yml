@@ -1,33 +1,54 @@
 ---
-- name: Criar e Aplicar VLANs no FortiSwitch
+- name: Criar e verificar VLAN no FortiSwitch via SSH Expect
   hosts: all
   gather_facts: false
 
   vars:
-    vlan_id: "100"
-    vlan_name: "VLAN_USUARIOS"
-    vlan_ip: "192.168.100.1/24"
-    target_port: "port1"
+    vlan_id: "20"
+    vlan_name: "VLAN20"
+    ssh_port: "{{ ansible_port | default(22) }}"
 
   tasks:
-    - name: 1. Criar a Interface de VLAN no FortiSwitch
-      fortinet.fortios.fortios_system_interface:
-        vdom: "root"
-        state: "present"
-        system_interface:
-          name: "{{ vlan_name }}"
-          vdom: "root"
-          vlanid: "{{ vlan_id }}"
-          interface: "internal"
-          type: "vlan"
-          ip: "{{ vlan_ip }}"
+    - name: Definir comandos para criar VLAN
+      ansible.builtin.set_fact:
+        fortiswitch_commands: |
+          config switch vlan
+          edit {{ vlan_id }}
+          set description {{ vlan_name }}
+          next
+          end
+          exit
 
-    - name: 2. Atribuir a VLAN Nativa à Porta do Switch
-      fortinet.fortios.fortios_switch_controller_managed_switch:
-        vdom: "root"
-        state: "present"
-        switch_controller_managed_switch:
-          switch_id: "{{ ansible_facts['hostname'] | default('SW-201') }}"
-          ports:
-            - port_name: "{{ target_port }}"
-              vlan: "{{ vlan_name }}"
+    - name: Criar VLAN via SSH
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#": "{{ fortiswitch_commands }}"
+        timeout: 30
+      delegate_to: localhost
+      register: vlan_creation_output
+
+    - name: Aguardar aplicação das alterações
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Verificar VLANs existentes no switch
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#": "show switch vlan {{ vlan_id }}\nexit\n"
+        timeout: 30
+      delegate_to: localhost
+      register: vlan_check_output
+
+    - name: Confirmar se a VLAN foi encontrada
+      ansible.builtin.debug:
+        msg: "✅ VLAN {{ vlan_id }} foi criada com sucesso!"
+      when: vlan_check_output.stdout is search('edit\\s+' ~ vlan_id)
+
+    - name: Avisar se a VLAN não foi encontrada
+      ansible.builtin.debug:
+        msg: "❌ VLAN {{ vlan_id }} NAO foi encontrada!"
+      when: vlan_check_output.stdout is not search('edit\\s+' ~ vlan_id)
