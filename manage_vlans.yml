@@ -1,0 +1,31 @@
+---
+- name: Criar e Aplicar VLANs no FortiSwitch
+  hosts: all
+  gather_facts: false
+
+  vars:
+    vlan_id: "1000"
+    vlan_name: "VLAN_USUARIOS"
+    #vlan_ip: "192.168.100.1/24"
+    target_port: "port1"
+
+  tasks:
+    - name: 1. Criar a Interface de VLAN no FortiSwitch
+      fortinet.fortios.fortios_system_interface:
+        vdom: "root"
+        state: "present"
+        system_interface:
+          name: "{{ vlan_name }}"
+          vdom: "root"
+          vlanid: "{{ vlan_id }}"
+          interface: "internal"
+          type: "vlan"
+          #ip: "{{ vlan_ip }}"
+
+    - name: 2. Atribuir a VLAN a uma porta do Switch
+      fortinet.fortios.fortios_switch_interface:
+        vdom: "root"
+        state: "present"
+        switch_interface:
+          name: "{{ target_port }}"
+          native_vlan: "{{ vlan_name }}"
