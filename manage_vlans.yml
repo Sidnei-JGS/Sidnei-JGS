@@ -4,9 +4,9 @@
   gather_facts: false
 
   vars:
-    vlan_id: "1000"
+    vlan_id: "100"
     vlan_name: "VLAN_USUARIOS"
-    #vlan_ip: "192.168.100.1/24"
+    vlan_ip: "192.168.100.1/24"
     target_port: "port1"
 
   tasks:
@@ -20,12 +20,14 @@
           vlanid: "{{ vlan_id }}"
           interface: "internal"
           type: "vlan"
-          #ip: "{{ vlan_ip }}"
+          ip: "{{ vlan_ip }}"
 
-    - name: 2. Atribuir a VLAN a uma porta do Switch
-      fortinet.fortios.fortios_switch_interface:
+    - name: 2. Atribuir a VLAN Nativa à Porta do Switch
+      fortinet.fortios.fortios_switch_controller_managed_switch:
         vdom: "root"
         state: "present"
-        switch_interface:
-          name: "{{ target_port }}"
-          native_vlan: "{{ vlan_name }}"
+        switch_controller_managed_switch:
+          switch_id: "{{ ansible_facts['hostname'] | default('SW-201') }}"
+          ports:
+            - port_name: "{{ target_port }}"
+              vlan: "{{ vlan_name }}"
