@@ -8,8 +8,6 @@
       fortinet.fortios.fortios_monitor_fact:
         vdom: "root"
         selector: "system_status"
-        username: "{{ ansible_user }}"
-        password: "{{ ansible_password }}"
       register: status_result
 
     - name: Exibir resultado no console do AWX
