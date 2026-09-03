@@ -1,0 +1,23 @@
+---
+- name: Configurar hostname no FortiGate via expect local
+  hosts: switches
+  gather_facts: no
+  tasks:
+
+    - name: Configurar hostname usando ssh com expect local
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "abc@1234"
+          '#': |
+            config system global
+            set hostname SW-DR-MAL
+            end
+            exit
+        timeout: 20
+      delegate_to: localhost
+      register: output
+
+    - name: Exibir saída do expect
+      debug:
+        var: output.stdout_lines

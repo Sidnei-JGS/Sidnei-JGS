@@ -1,0 +1,31 @@
+- name: Configurar User no FortiSwitch
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Conectando ao Switch Fortinet
+      set_fact:
+        fortiswitch_commands: | # executa comandos 
+          config system admin
+          edit {{ fortiswitch_user }} 
+          set accprofile {{ profile_sw }}
+          set password {{ fortiswitch_password }}
+          end
+          exit
+
+    - name: Criando Novo usuário
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": "{{ fortiswitch_commands }}" #chama bloco que executa os comandos necessários nessa task
+        timeout: 30
+      delegate_to: localhost
+      register: output
+
+#    - name: Exibir saída do expect
+#      debug:
+#        var: output.stdout_lines

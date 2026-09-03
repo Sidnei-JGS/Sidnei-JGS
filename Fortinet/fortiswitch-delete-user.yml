@@ -1,0 +1,29 @@
+- name: Deletar User no FortiSwitch
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Conectando ao Switch Fortinet
+      set_fact:
+        fortiswitch_commands: |
+          config system admin
+          delete {{ username_to_delete }}
+          end
+          exit
+
+    - name: Deletando Usuário
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": "{{ fortiswitch_commands }}"
+        timeout: 30
+      delegate_to: localhost
+      register: output
+
+    - name: Exibir saída do expect
+      debug:
+        var: output.stdout_lines

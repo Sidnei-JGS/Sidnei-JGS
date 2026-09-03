@@ -1,0 +1,48 @@
+- name: Gerenciar usuários no FortiSwitch
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  vars:
+    fortiswitch_user: "{{ username }}"
+    profile_sw: "{{ user_profile }}"
+    fortiswitch_password: "{{ user_password }}"
+
+  tasks:
+    - name: Verificar se o usuário já existe
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": "show system admin\nexit"
+        timeout: 30
+      delegate_to: localhost
+      register: check_user_output
+
+    - name: Verificar existência do usuário na saída
+      set_fact:
+        user_exists: "{{ check_user_output.stdout is search('username\\s*:\\s*' + fortiswitch_user) }}"
+
+    - name: Criar usuário apenas se não existir
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": |
+            config system admin
+            edit {{ fortiswitch_user }}
+            set accprofile {{ profile_sw }}
+            set password {{ fortiswitch_password }}
+            end
+            exit
+        timeout: 30
+      when: not user_exists
+      delegate_to: localhost
+      register: output
+
+    - name: Informar se o usuário já existia
+      debug:
+        msg: "Usuário '{{ fortiswitch_user }}' já existe no host {{ inventory_hostname }}. Pulando criação."
+      when: user_exists

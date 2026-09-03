@@ -1,0 +1,17 @@
+---
+- name: Configurar hostname no switch FortiGate via expect
+  hosts: switches
+  gather_facts: no
+
+  tasks:
+    - name: Alterar hostname via expect
+      ansible.builtin.expect:
+        command: ssh admin@{{ inventory_hostname }}
+        responses:
+          'Password:': "abc@1234"
+          '.*#': |
+            config system global
+            set hostname MALWEE
+            end
+            exit
+        timeout: 10

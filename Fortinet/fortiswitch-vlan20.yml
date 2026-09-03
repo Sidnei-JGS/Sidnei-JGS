@@ -1,0 +1,51 @@
+---
+- name: Criar VLAN no FortiSwitch
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Conectar ao Switch Fortinet e configurar a VLAN 20
+      set_fact:
+        fortiswitch_commands: |
+          config switch vlan
+          edit 20
+          set description VLAN20
+          next
+          end
+          exit
+
+    - name: Criar VLAN 20
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": "{{ fortiswitch_commands }}"
+        timeout: 30
+      delegate_to: localhost
+      register: output
+
+    - name: Exibir saída do comando para criação da VLAN
+      debug:
+        var: output.stdout_lines
+
+    - name: Verificar se VLAN 20 foi criada com sucesso
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": "show switch vlan"
+        timeout: 30
+      delegate_to: localhost
+      register: vlan_check_output
+
+    - name: Exibir saída da verificação da VLAN 20
+      debug:
+        var: vlan_check_output.stdout_lines
+
+    - name: Verificar se a VLAN 20 está na lista
+      debug:
+        msg: "VLAN 20 foi criada com sucesso."
+      when: "'20' in vlan_check_output.stdout_lines | join(' ')"

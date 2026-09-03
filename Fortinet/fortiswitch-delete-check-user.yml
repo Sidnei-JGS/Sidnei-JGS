@@ -1,0 +1,67 @@
+- name: Deletar usuário no FortiSwitch com verificação
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Definir comando para listar usuários
+      set_fact:
+        check_user_commands: |
+          config system admin
+          show
+          end
+          exit
+
+    - name: Verificar se o usuário existe
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "password:": "{{ ssh_password }}"
+          ".*#": "{{ check_user_commands }}"
+        timeout: 60
+      delegate_to: localhost
+      register: user_check_output
+
+#    - name: Exibir resultado da checagem
+#      debug:
+#        var: user_check_output.stdout_lines
+
+    - name: Definir variável para saber se o usuário existe
+      set_fact:
+        user_exists: "{{ username_to_delete in user_check_output.stdout }}"
+
+    - name: Exibir status da existência do usuário
+      debug:
+        msg: "Usuário '{{ username_to_delete }}' {{ 'encontrado' if user_exists else 'não encontrado' }} no switch."
+
+    - name: Preparar comandos para deletar usuário
+      set_fact:
+        fortiswitch_delete_commands: |
+          config system admin
+          delete {{ username_to_delete }}
+          end
+          exit
+      when: user_exists
+
+    - name: Deletar usuário se ele existir
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "password:": "{{ ssh_password }}"
+          ".*#": "{{ fortiswitch_delete_commands }}"
+        timeout: 60
+      when: user_exists
+      delegate_to: localhost
+      register: delete_output
+
+ #   - name: Mostrar saída do delete
+ #     debug:
+ #       var: delete_output.stdout_lines
+      when: user_exists
+
+    - name: Avisar se usuário não foi encontrado
+      debug:
+        msg: "Usuário '{{ username_to_delete }}' não foi encontrado no switch. Nada a deletar."
+      when: not user_exists

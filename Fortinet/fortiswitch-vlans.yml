@@ -1,0 +1,70 @@
+---
+- name: Criar e verificar múltiplas VLANs no FortiSwitch
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  vars:
+    vlan_ids:
+      - 20
+      - 30
+      - 40
+    vlan_descriptions:
+      20: "Desktops"
+      30: "Impressoras"
+      40: "Automação"
+
+  tasks:
+    - name: Definir comandos para criar as VLANs
+      set_fact:
+        fortiswitch_commands: |
+          config switch vlan
+          {% for vlan_id in vlan_ids %}
+          edit {{ vlan_id }}
+          set description "{{ vlan_descriptions[vlan_id] }}"
+          next
+          {% endfor %}
+          end
+          exit
+
+    - name: Criar VLANs
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#" : "{{ fortiswitch_commands }}"
+        timeout: 30
+      delegate_to: localhost
+      register: vlan_creation_output
+
+    - name: Aguardar alguns segundos para garantir que as alterações sejam aplicadas
+      pause:
+        seconds: 2
+
+    - name: Verificar VLANs existentes no switch
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#" : "show switch vlan\nexit\n"
+        timeout: 30
+      delegate_to: localhost
+      register: vlan_check_output
+
+    - name: Exibir saída bruta da verificação
+      debug:
+        var: vlan_check_output.stdout
+
+    - name: Confirmar se as VLANs foram criadas com sucesso
+      debug:
+        msg: "✅ VLAN {{ item }} foi encontrada com sucesso!"
+      loop: "{{ vlan_ids }}"
+      when: vlan_check_output.stdout is search('edit\\s+{{ item }}')
+
+    - name: Avisar se as VLANs não foram encontradas
+      debug:
+        msg: "❌ VLAN {{ item }} **não** foi encontrada!"
+      loop: "{{ vlan_ids }}"
+      when: vlan_check_output.stdout is not search('edit\\s+{{ item }}')

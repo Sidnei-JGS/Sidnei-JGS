@@ -1,0 +1,16 @@
+---
+- name: Configurar hostname do FortiSwitch via CLI
+  hosts: fortiswitches
+  gather_facts: false
+  vars:
+    new_hostname: "novo-hostname-desejado"
+
+  tasks:
+    - name: Configurar hostname
+      ansible.builtin.command:
+        cmd: "config system global && set hostname {{ new_hostname }} && end"
+      register: resultado_comando
+
+#    - name: Verificar resultado (opcional)
+#      ansible.builtin.debug:
+#        var: resultado_comando

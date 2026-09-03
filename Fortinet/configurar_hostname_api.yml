@@ -1,0 +1,41 @@
+---
+- name: Configurar hostname do FortiSwitch via SSH (CLI)
+  hosts: fortiswitches
+  gather_facts: false
+  vars:
+    new_hostname: "TESTE"  # Hostname definido como TESTE
+    cli_prompt: "{{ inventory_hostname }} #"  # Ajuste o prompt se necessário
+
+  tasks:
+    - name: Entrar no modo de configuração global
+      ansible.netcommon.cli_command:
+        command: "config system global"
+        prompt: "{{ cli_prompt }}"
+      register: config_global_result
+
+    - name: Configurar o hostname
+      ansible.netcommon.cli_command:
+        command: "set hostname {{ new_hostname }}"
+        prompt: "{{ cli_prompt }}(global) #"  # Ajuste o prompt se necessário
+      register: set_hostname_result
+
+    - name: Finalizar a configuração
+      ansible.netcommon.cli_command:
+        command: "end"
+        prompt: "{{ cli_prompt }}(global) #"  # Ou "{{ cli_prompt }} #" dependendo da versão
+      register: end_result
+
+    - name: Verificar resultados (opcional)
+      ansible.builtin.debug:
+        var: config_global_result.stdout_lines
+      when: config_global_result.failed
+
+    - name: Verificar resultados (opcional)
+      ansible.builtin.debug:
+        var: set_hostname_result.stdout_lines
+      when: set_hostname_result.failed
+
+    - name: Verificar resultados (opcional)
+      ansible.builtin.debug:
+        var: end_result.stdout_lines
+      when: end_result.failed

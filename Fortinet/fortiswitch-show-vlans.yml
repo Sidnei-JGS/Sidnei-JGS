@@ -1,0 +1,30 @@
+---
+- name: Listar VLANs existentes no FortiSwitch
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Conectar ao Switch e exibir VLANs existentes
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#" : "show switch vlan\nexit\n"
+        timeout: 30
+      delegate_to: localhost
+      register: vlan_list_output
+
+#    - name: Exibir a saída do comando show switch vlan
+#      debug:
+#        var: vlan_list_output.stdout
+
+    - name: Processar a saída para identificar VLANs
+      set_fact:
+        vlan_ids: "{{ vlan_list_output.stdout_lines | select('search', '^\\s*edit\\s*\\d+\\s*') | map('regex_replace', '^\\s*edit\\s*(\\d+)\\s*', '\\1') | list }}"
+
+    - name: Exibir as VLANs encontradas
+      debug:
+        msg: "VLANs existentes: {{ vlan_ids }}"

@@ -1,0 +1,48 @@
+- name: Criar usuário no FortiSwitch apenas se não existir
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Verificar se o usuário já existe
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": "show system admin\nexit"
+        timeout: 30
+      delegate_to: localhost
+      register: check_user_output
+
+    - name: Checar se o usuário está presente na saída
+      set_fact:
+        user_exists: "{{ fortiswitch_user in check_user_output.stdout }}"
+
+    - name: Exibir diagnóstico
+      debug:
+        msg: "Usuário {{ fortiswitch_user }} já existe"
+      when: user_exists
+
+    - name: Conectar e criar usuário se ele não existir
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": |
+            config system admin
+            edit {{ fortiswitch_user }}
+            set accprofile {{ profile_sw }}
+            set password {{ fortiswitch_password }}
+            end
+            exit
+        timeout: 30
+      delegate_to: localhost
+      when: not user_exists
+      register: create_output
+
+    - name: Exibir saída da criação
+      debug:
+        var: create_output.stdout_lines
+      when: not user_exists

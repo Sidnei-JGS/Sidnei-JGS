@@ -1,0 +1,16 @@
+---
+- name: Testar cli_command (Forçando conexão SSH)
+  hosts: 192.168.1.47
+  gather_facts: false
+
+  tasks:
+    - name: Enviar comando show version
+      ansible.netcommon.cli_command:
+        command: "show version"
+      vars:
+        ansible_connection: ssh
+      register: version_output
+
+    - name: Mostrar saída
+      ansible.builtin.debug:
+        var: version_output

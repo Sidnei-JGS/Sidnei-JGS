@@ -1,0 +1,36 @@
+---
+- name: Listar usuários existentes no FortiSwitch
+  hosts: switches
+  gather_facts: no
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Conectar ao Switch Fortinet e obter a lista de usuários
+      set_fact:
+        fortiswitch_commands: |
+          show system admin
+          exit
+
+    - name: Executar comando "show system admin" no switch
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "{{ ssh_password }}"
+          "#": "{{ fortiswitch_commands }}"
+        timeout: 30
+      delegate_to: localhost
+      register: show_admin_output
+
+#    - name: Mostrar saída completa do comando "show system admin"
+#      debug:
+#        var: show_admin_output.stdout_lines
+
+    - name: Extrair nomes dos usuários com regex
+      set_fact:
+        user_list: "{{ show_admin_output.stdout_lines | select('match', '^\\s*edit \"(.*?)\"') | map('regex_replace', '^\\s*edit \"(.*?)\"', '\\1') | list }}"
+
+    - name: Exibir lista de usuários encontrados
+      debug:
+        var: user_list

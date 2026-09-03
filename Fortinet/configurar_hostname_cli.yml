@@ -1,0 +1,19 @@
+---
+- name: Configurar hostname do FortiSwitch via API
+  hosts: fortiswitches
+  gather_facts: false
+  vars:
+    new_hostname: "novo-hostname-desejado"  # Defina o novo hostname aqui
+    fortios_host: "{{ inventory_hostname }}"
+    fortios_username: "admin"  # Substitua pelo seu usuário da API
+    fortios_password: "abc@1234"  # Substitua pela sua senha da API
+
+  tasks:
+    - name: Conectar ao FortiSwitch e configurar o hostname
+      fortinet.fortios.fortios_system_global:
+        host: "{{ fortios_host }}"
+        username: "{{ fortios_username }}"
+        password: "{{ fortios_password }}"
+        vdom: "root"  # Ou o VDOM apropriado
+        system_global:
+          hostname: "{{ new_hostname }}"

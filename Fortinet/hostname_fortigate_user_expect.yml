@@ -1,0 +1,25 @@
+---
+- name: Configurar User no FortiSwitch via expect local
+  hosts: switches
+  gather_facts: no
+
+  tasks:
+    - name: Configurar User usando ssh com expect local
+      ansible.builtin.expect:
+        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        responses:
+          "admin@.*password:": "abc@1234"
+          '#': |
+           config system admin
+           edit guidorah
+           set accprofile "super_admin"
+           set password {{ fortiswitch_password }}
+           end
+           exit
+        timeout: 30
+      delegate_to: localhost
+      register: output
+
+    - name: Exibir saída do expect
+      debug:
+        var: output.stdout_lines
