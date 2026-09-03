@@ -32,19 +32,42 @@
           {% endfor %}
           {{ valid | to_json }}
 
-    - name: 4. Aplicar descricao em cada porta com resposta a prompt generico
-      ansible.builtin.expect:
-        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
-        responses:
-          "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "config switch interface\nedit {{ item.port }}\nset description to-{{ item.name }}\nnext\nend\nexit\n"
-        echo: true
-        timeout: 15
+    - name: 4. Aplicar descricoes via Script SSH PTY
+      ansible.builtin.shell: |
+        python3 -c '
+        import pexpect, sys
+        child = pexpect.spawn("ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}", encoding="utf-8", timeout=20)
+        child.expect("(?i)password:")
+        child.sendline("{{ ansible_password }}")
+        child.expect(".*#")
+        child.sendline("config switch interface")
+        child.expect(".*#")
+        child.sendline("edit {{ item.port }}")
+        child.expect(".*#")
+        child.sendline("set description \"to-{{ item.name }}\"")
+        child.expect(".*#")
+        child.sendline("next")
+        child.expect(".*#")
+        child.sendline("end")
+        child.expect(".*#")
+        child.sendline("exit")
+        child.expect(pexpect.EOF)
+        '
       delegate_to: localhost
       loop: "{{ valid_lldp_ports | from_json }}"
       when: (valid_lldp_ports | from_json) | length > 0
       register: apply_desc_output
 
-    - name: 5. Exibir resultado do processamento
+    - name: 5. Validar descricoes salvas no FortiSwitch
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "show switch interface | grep -E 'edit|description'\nexit\n"
+        timeout: 30
+      delegate_to: localhost
+      register: audit_output
+
+    - name: 6. Exibir resultado da auditoria
       ansible.builtin.debug:
-        msg: "✅ Descrições atualizadas nas portas do FortiSwitch com sucesso!"
+        var: audit_output.stdout_lines
