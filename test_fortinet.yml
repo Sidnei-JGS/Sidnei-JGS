@@ -1,15 +1,14 @@
 ---
-- name: Testar Conexao via CLI no FortiSwitch
+- name: Testar Conexao via API no FortiSwitch
   hosts: all
   gather_facts: false
-  connection: network_cli
 
   tasks:
-    - name: Coletar status do FortiSwitch via CLI
-      ansible.netcommon.cli_command:
-        command: show system status
-      register: output
+    - name: Coletar status do sistema
+      fortinet.fortios.fortios_monitor_fact:
+        selector: "system_status"
+      register: status_result
 
-    - name: Exibir resultado no console do AWX
+    - name: Exibir resultado
       ansible.builtin.debug:
-        var: output.stdout_lines
+        var: status_result
