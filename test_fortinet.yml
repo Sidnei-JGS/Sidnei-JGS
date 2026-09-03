@@ -5,5 +5,5 @@
 
   tasks:
     - name: Coletar status do FortiSwitch
-      fortinet.fortios.fortios_monitor_fact:
+      fortinet.fortios.fortios_monitor_facts:
         selector: "system_status"
