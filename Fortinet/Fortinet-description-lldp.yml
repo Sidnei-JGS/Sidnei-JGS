@@ -13,7 +13,7 @@
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
           ".*#": "get switch lldp neighbors-summary\nexit\n"
-        timeout: 60
+        timeout: 30
       delegate_to: localhost
       register: lldp_output
 
@@ -21,32 +21,27 @@
       ansible.builtin.set_fact:
         lldp_pairs: "{{ lldp_output.stdout | regex_findall('(port\\d+)\\s+.*?\\s+([A-Za-z0-9_\\.-]+)\\s+') }}"
 
-    - name: 3. Montar bloco CLI de alteracao de descricoes
+    - name: 3. Filtrar portas com LLDP valido
       ansible.builtin.set_fact:
-        cli_commands: >-
-          config switch interface
+        valid_lldp_ports: >-
+          {% set valid = [] %}
           {% for pair in lldp_pairs %}
-            {% set port = pair[0] %}
-            {% set name = pair[1] | trim %}
-            {% if name != '-' and name != '' %}
-          edit {{ port }}
-          set description to-{{ name }}
-          next
+            {% if pair[1] | trim != '-' and pair[1] | trim != '' %}
+              {% set _ = valid.append({'port': pair[0], 'name': pair[1] | trim}) %}
             {% endif %}
           {% endfor %}
-          end
-          exit
+          {{ valid | to_json }}
 
-    - name: 4. Executar bloco CLI de configuracao de portas
-      ansible.builtin.expect:
-        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
-        responses:
-          "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "{{ cli_commands }}\n"
-        timeout: 60
+    - name: 4. Aplicar descricao individual via SSH Raw
+      ansible.builtin.raw: >
+        sshpass -p "{{ ansible_password }}"
+        ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}
+        "config switch interface edit {{ item.port }} set description to-{{ item.name }} next end"
       delegate_to: localhost
-      register: apply_desc_output
+      loop: "{{ valid_lldp_ports | from_json }}"
+      when: (valid_lldp_ports | from_json) | length > 0
+      register: raw_output
 
     - name: 5. Exibir resultado do processamento
       ansible.builtin.debug:
-        msg: "✅ Bloco de descrições LLDP enviado e gravado com sucesso no FortiSwitch!"
+        msg: "✅ Descrições atualizadas nas portas com LLDP no FortiSwitch!"
