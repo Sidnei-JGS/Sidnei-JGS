@@ -1,39 +1,16 @@
 ---
-- name: Criar e verificar VLAN no FortiSwitch via SSH Expect
+- name: Gerenciar VLANs de forma Idempotente no FortiSwitch
   hosts: all
   gather_facts: false
 
   vars:
     vlan_id: "20"
-    vlan_name: "VLAN20"
+    vlan_name: "VLAN_USUARIOS"
+    target_port: "port1"
     ssh_port: "{{ ansible_port | default(22) }}"
 
   tasks:
-    - name: Definir comandos para criar VLAN
-      ansible.builtin.set_fact:
-        fortiswitch_commands: |
-          config switch vlan
-          edit {{ vlan_id }}
-          set description {{ vlan_name }}
-          next
-          end
-          exit
-
-    - name: Criar VLAN via SSH
-      ansible.builtin.expect:
-        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
-        responses:
-          "(?i)password:": "{{ ansible_password }}\n"
-          "#": "{{ fortiswitch_commands }}"
-        timeout: 30
-      delegate_to: localhost
-      register: vlan_creation_output
-
-    - name: Aguardar aplicação das alterações
-      ansible.builtin.pause:
-        seconds: 2
-
-    - name: Verificar VLANs existentes no switch
+    - name: 1. Checar se a VLAN ja existe e obter sua configuracao
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
@@ -41,14 +18,47 @@
           "#": "show switch vlan {{ vlan_id }}\nexit\n"
         timeout: 30
       delegate_to: localhost
-      register: vlan_check_output
+      register: vlan_check
 
-    - name: Confirmar se a VLAN foi encontrada
-      ansible.builtin.debug:
-        msg: "✅ VLAN {{ vlan_id }} foi criada com sucesso!"
-      when: vlan_check_output.stdout is search('edit\\s+' ~ vlan_id)
+    - name: 2. Analisar o status da VLAN no FortiSwitch
+      ansible.builtin.set_fact:
+        vlan_exists: "{{ vlan_check.stdout is search('edit\\s+' ~ vlan_id) }}"
+        name_matches: "{{ vlan_check.stdout is search('set description \"?' ~ vlan_name ~ '\"?') }}"
 
-    - name: Avisar se a VLAN não foi encontrada
+    - name: 3. Definir comandos apenas se a VLAN nao existir ou se o nome estiver incorreto
+      ansible.builtin.set_fact:
+        fortiswitch_commands: |
+          config switch vlan
+          edit {{ vlan_id }}
+          set description {{ vlan_name }}
+          next
+          end
+          config switch interface
+          edit {{ target_port }}
+          set native-vlan {{ vlan_id }}
+          next
+          end
+          exit
+      when: not vlan_exists or not name_matches
+
+    - name: 4. Aplicar ou Corrigir VLAN via SSH
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#": "{{ fortiswitch_commands }}"
+        timeout: 30
+      delegate_to: localhost
+      when: not vlan_exists or not name_matches
+      register: apply_output
+
+    - name: 5. Feedback no console do AWX
       ansible.builtin.debug:
-        msg: "❌ VLAN {{ vlan_id }} NAO foi encontrada!"
-      when: vlan_check_output.stdout is not search('edit\\s+' ~ vlan_id)
+        msg: >-
+          {% if not vlan_exists %}
+          ✅ VLAN {{ vlan_id }} criada do zero e aplicada na {{ target_port }}!
+          {% elif not name_matches %}
+          ⚠️ VLAN {{ vlan_id }} ja existia, mas o nome estava incorreto. Nome atualizado para '{{ vlan_name }}'!
+          {% else %}
+          ℹ️ VLAN {{ vlan_id }} ja existe com o nome '{{ vlan_name }}' correto. Nenhuma alteracao foi necessaria (OK).
+          {% endif %}
