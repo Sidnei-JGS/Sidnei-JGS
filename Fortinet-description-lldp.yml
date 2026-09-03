@@ -21,48 +21,35 @@
       ansible.builtin.set_fact:
         lldp_pairs: "{{ lldp_output.stdout | regex_findall('(port\\d+)\\s+.*?\\s+([A-Za-z0-9_\\.-]+)\\s+') }}"
 
-    - name: 3. Consultar descricoes atuais das portas
-      ansible.builtin.expect:
-        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
-        responses:
-          "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "show switch interface\nexit\n"
-        timeout: 60
-      delegate_to: localhost
-      register: interface_output
-
-    - name: 4. Montar bloco de comandos apenas para vizinhos validos
+    - name: 3. Filtrar apenas vizinhos validos (ignora traço '-')
       ansible.builtin.set_fact:
-        update_commands: >-
-          {% set cmds = [] %}
+        valid_lldp_ports: >-
+          {% set valid = [] %}
           {% for pair in lldp_pairs %}
-            {% set port = pair[0] %}
-            {% set lldp_name = pair[1] | trim %}
-            {% if lldp_name != '-' and lldp_name != '' %}
-              {% set expected_desc = 'to-' ~ lldp_name %}
-              {% if not interface_output.stdout is search('edit "' ~ port ~ '"[\\s\\S]*?set description "' ~ expected_desc ~ '"') %}
-                {% set _ = cmds.append('config switch interface\nedit ' ~ port ~ '\nset description "' ~ expected_desc ~ '"\nnext\nend\n') %}
-              {% endif %}
+            {% if pair[1] | trim != '-' and pair[1] | trim != '' %}
+              {% set _ = valid.append({'port': pair[0], 'name': pair[1] | trim}) %}
             {% endif %}
           {% endfor %}
-          {{ cmds | join('') }}
+          {{ valid }}
 
-    - name: 5. Aplicar novas descricoes via SSH
+    - name: 4. Aplicar descricao em cada porta com LLDP
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          "#": "{{ update_commands }}exit\n"
-        timeout: 60
+          ".*#": |
+            config switch interface
+            edit {{ item.port }}
+            set description to-{{ item.name }}
+            next
+            end
+            exit
+        timeout: 30
       delegate_to: localhost
-      when: update_commands | trim != ""
+      loop: "{{ valid_lldp_ports }}"
+      when: valid_lldp_ports | length > 0
       register: apply_desc_output
 
-    - name: 6. Exibir resultado do processamento
+    - name: 5. Exibir resultado do processamento
       ansible.builtin.debug:
-        msg: >-
-          {% if update_commands | trim != "" %}
-          ✅ Descrições das portas com LLDP ativo atualizadas com sucesso!
-          {% else %}
-          ℹ️ Todas as portas com LLDP já possuem a descrição "to-<nome>" correta.
-          {% endif %}
+        msg: "✅ Processadas {{ valid_lldp_ports | length }} portas com LLDP ativo no FortiSwitch!"
