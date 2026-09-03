@@ -1,0 +1,66 @@
+---
+- name: Sincronizar Descricoes de Portas via LLDP no FortiSwitch
+  hosts: all
+  gather_facts: false
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+
+  tasks:
+    - name: 1. Coletar dados do LLDP no FortiSwitch
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "get switch lldp neighbors-detail\nexit\n"
+        timeout: 60
+      delegate_to: localhost
+      register: lldp_output
+
+    - name: 2. Extrair mapeamento de Porta e Nome do Vizinho LLDP
+      ansible.builtin.set_fact:
+        lldp_pairs: "{{ lldp_output.stdout | regex_findall('Port Name : (port\\d+)[\\s\\S]*?System Name : ([^\\r\\n]+)') }}"
+
+    - name: 3. Consultar descricoes atuais das portas
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "show switch interface\nexit\n"
+        timeout: 60
+      delegate_to: localhost
+      register: interface_output
+
+    - name: 4. Montar bloco de comandos para portas desatualizadas
+      ansible.builtin.set_fact:
+        update_commands: >-
+          {% set cmds = [] %}
+          {% for pair in lldp_pairs %}
+            {% set port = pair[0] %}
+            {% set lldp_name = pair[1] | trim %}
+            {% set expected_desc = 'to-' ~ lldp_name %}
+            {% if not interface_output.stdout is search('edit "' ~ port ~ '"[\\s\\S]*?set description "' ~ expected_desc ~ '"') %}
+              {% set _ = cmds.append('config switch interface\nedit ' ~ port ~ '\nset description "' ~ expected_desc ~ '"\nnext\nend') %}
+            {% endif %}
+          {% endfor %}
+          {{ cmds | join('\n') }}
+
+    - name: 5. Aplicar novas descricoes via SSH
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "{{ update_commands }}\nexit\n"
+        timeout: 60
+      delegate_to: localhost
+      when: update_commands | trim != ""
+      register: apply_desc_output
+
+    - name: 6. Exibir resultado do processamento
+      ansible.builtin.debug:
+        msg: >-
+          {% if update_commands | trim != "" %}
+          ✅ Descrições atualizadas no FortiSwitch com sucesso!
+          {% else %}
+          ℹ️ Todas as portas com vizinhos LLDP já possuem a descrição "to-<nome>" correta. Nenhuma alteração foi necessária.
+          {% endif %}
