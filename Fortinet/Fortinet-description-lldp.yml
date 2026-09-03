@@ -32,15 +32,15 @@
           {% endfor %}
           {{ valid | to_json }}
 
-    - name: 4. Aplicar descricao em cada porta navegando pelos prompts
+    - name: 4. Aplicar descricao passo a passo no terminal
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "config switch interface\n"
-          ".*\\(interface\\) #": "edit {{ item.port }}\n"
-          ".*\\(port\\d+\\) #": "set description \"to-{{ item.name }}\"\nnext\nend\nexit\n"
-        timeout: 30
+          "SW-201 #": "config switch interface\n"
+          "SW-201 \\(interface\\) #": "edit {{ item.port }}\n"
+          "SW-201 \\({{ item.port }}\\) #": "set description \"to-{{ item.name }}\"\nnext\nend\nexit\n"
+        timeout: 20
       delegate_to: localhost
       loop: "{{ valid_lldp_ports | from_json }}"
       when: (valid_lldp_ports | from_json) | length > 0
