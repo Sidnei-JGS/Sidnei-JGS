@@ -1,3 +1,4 @@
 ---
 collections:
   - name: fortinet.fortios
+    version: 2.5.1
