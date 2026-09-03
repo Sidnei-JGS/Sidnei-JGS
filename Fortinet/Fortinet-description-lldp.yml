@@ -32,33 +32,21 @@
           {% endfor %}
           {{ valid | to_json }}
 
-    - name: 4. Aplicar descricoes via Script SSH PTY
-      ansible.builtin.shell: |
-        python3 -c '
-        import pexpect, sys
-        child = pexpect.spawn("ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}", encoding="utf-8", timeout=20)
-        child.expect("(?i)password:")
-        child.sendline("{{ ansible_password }}")
-        child.expect(".*#")
-        child.sendline("config switch interface")
-        child.expect(".*#")
-        child.sendline("edit {{ item.port }}")
-        child.expect(".*#")
-        child.sendline("set description \"to-{{ item.name }}\"")
-        child.expect(".*#")
-        child.sendline("next")
-        child.expect(".*#")
-        child.sendline("end")
-        child.expect(".*#")
-        child.sendline("exit")
-        child.expect(pexpect.EOF)
-        '
+    - name: 4. Aplicar descricao em cada porta navegando pelos prompts
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "config switch interface\n"
+          ".*\\(interface\\) #": "edit {{ item.port }}\n"
+          ".*\\(port\\d+\\) #": "set description \"to-{{ item.name }}\"\nnext\nend\nexit\n"
+        timeout: 30
       delegate_to: localhost
       loop: "{{ valid_lldp_ports | from_json }}"
       when: (valid_lldp_ports | from_json) | length > 0
       register: apply_desc_output
 
-    - name: 5. Validar descricoes salvas no FortiSwitch
+    - name: 5. Consultar status atualizado das interfaces
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
