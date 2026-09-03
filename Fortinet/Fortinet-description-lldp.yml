@@ -21,7 +21,7 @@
       ansible.builtin.set_fact:
         lldp_pairs: "{{ lldp_output.stdout | regex_findall('(port\\d+)\\s+.*?\\s+([A-Za-z0-9_\\.-]+)\\s+') }}"
 
-    - name: 3. Filtrar portas com LLDP valido
+    - name: 3. Filtrar apenas vizinhos validos
       ansible.builtin.set_fact:
         valid_lldp_ports: >-
           {% set valid = [] %}
@@ -32,16 +32,19 @@
           {% endfor %}
           {{ valid | to_json }}
 
-    - name: 4. Aplicar descricao individual via SSH Raw
-      ansible.builtin.raw: >
-        sshpass -p "{{ ansible_password }}"
-        ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}
-        "config switch interface edit {{ item.port }} set description to-{{ item.name }} next end"
+    - name: 4. Aplicar descricao em cada porta com resposta a prompt generico
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          ".*#": "config switch interface\nedit {{ item.port }}\nset description to-{{ item.name }}\nnext\nend\nexit\n"
+        echo: true
+        timeout: 15
       delegate_to: localhost
       loop: "{{ valid_lldp_ports | from_json }}"
       when: (valid_lldp_ports | from_json) | length > 0
-      register: raw_output
+      register: apply_desc_output
 
     - name: 5. Exibir resultado do processamento
       ansible.builtin.debug:
-        msg: "✅ Descrições atualizadas nas portas com LLDP no FortiSwitch!"
+        msg: "✅ Descrições atualizadas nas portas do FortiSwitch com sucesso!"
