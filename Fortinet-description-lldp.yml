@@ -21,7 +21,7 @@
       ansible.builtin.set_fact:
         lldp_pairs: "{{ lldp_output.stdout | regex_findall('(port\\d+)\\s+.*?\\s+([A-Za-z0-9_\\.-]+)\\s+') }}"
 
-    - name: 3. Filtrar apenas vizinhos validos (ignora traço '-')
+    - name: 3. Filtrar apenas vizinhos validos (ignora traco '-')
       ansible.builtin.set_fact:
         valid_lldp_ports: >-
           {% set valid = [] %}
@@ -30,7 +30,7 @@
               {% set _ = valid.append({'port': pair[0], 'name': pair[1] | trim}) %}
             {% endif %}
           {% endfor %}
-          {{ valid }}
+          {{ valid | to_json }}
 
     - name: 4. Aplicar descricao em cada porta com LLDP
       ansible.builtin.expect:
@@ -46,10 +46,10 @@
             exit
         timeout: 30
       delegate_to: localhost
-      loop: "{{ valid_lldp_ports }}"
-      when: valid_lldp_ports | length > 0
+      loop: "{{ valid_lldp_ports | from_json }}"
+      when: (valid_lldp_ports | from_json) | length > 0
       register: apply_desc_output
 
     - name: 5. Exibir resultado do processamento
       ansible.builtin.debug:
-        msg: "✅ Processadas {{ valid_lldp_ports | length }} portas com LLDP ativo no FortiSwitch!"
+        msg: "✅ Processadas {{ (valid_lldp_ports | from_json) | length }} portas com LLDP ativo no FortiSwitch!"
