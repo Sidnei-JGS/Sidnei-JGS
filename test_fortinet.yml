@@ -1,0 +1,9 @@
+---
+- name: Testar Conexao com FortiSwitch
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Coletar status do FortiSwitch
+      fortinet.fortios.fortios_monitor_fact:
+        selector: "system_status"
