@@ -1,0 +1,90 @@
+---
+- name: Sincronizar Descricoes via LLDP no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+
+  tasks:
+    - name: 1. Coletar dados do LLDP no Aruba CX
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "[a-zA-Z0-9_.-]+#": 
+            - "no page"
+            - "show lldp neighbor-info"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      register: lldp_output
+      failed_when: lldp_output.rc not in [0, 255]
+
+    - name: 2. Extrair colunas (Porta Local, Porta Remota, Device-name)
+      # O AOS-CX retorna: 1/1/1   1/1/24   00:00:00:00:00:00   SW-CORE
+      ansible.builtin.set_fact:
+        lldp_pairs: "{{ lldp_output.stdout | regex_findall('(?m)^(\\d+/\\d+/\\d+|lag\\d+)\\s+([^\\s]+)\\s+(?:[^\\s]+)\\s+([^\\s\\r\\n]+)') }}"
+
+    - name: 3. Filtrar vizinhos e montar nome
+      ansible.builtin.set_fact:
+        valid_lldp_ports: >-
+          {% set valid = [] %}
+          {% for row in lldp_pairs %}
+            {% set local_port = row[0] %}
+            {% set remote_port = row[1] | trim %}
+            {% set device_name = row[2] | trim %}
+            {% if device_name != '-' and device_name != '' %}
+              {% set final_name = device_name ~ '-' ~ remote_port %}
+              {% set _ = valid.append({'port': local_port, 'name': final_name}) %}
+            {% endif %}
+          {% endfor %}
+          {{ valid | to_json }}
+
+    - name: 4. Aplicar descricao nas interfaces do AOS-CX
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "[a-zA-Z0-9_.-]+#": "config\n"
+          "\\(config\\)#": "interface {{ item.port }}\n"
+          "\\(config-if\\)#": "description \"to-{{ item.name }}\"\nexit\nexit\nexit\n"
+        timeout: 15
+      delegate_to: localhost
+      loop: "{{ valid_lldp_ports | from_json }}"
+      when: (valid_lldp_ports | from_json) | length > 0
+      register: apply_desc_output
+      failed_when: apply_desc_output.rc not in [0, 255]
+
+    - name: 5. Salvar configuracao (write memory)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "[a-zA-Z0-9_.-]+#": 
+            - "write memory"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      when: (valid_lldp_ports | from_json) | length > 0
+      register: save_output
+      failed_when: save_output.rc not in [0, 255]
+
+    - name: 6. Consultar status atualizado das interfaces
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "[a-zA-Z0-9_.-]+#": 
+            - "no page"
+            - "show interface description | include to-"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      register: audit_output
+      failed_when: audit_output.rc not in [0, 255]
+
+    - name: 7. Exibir resultado da auditoria
+      ansible.builtin.debug:
+        var: audit_output.stdout_lines
