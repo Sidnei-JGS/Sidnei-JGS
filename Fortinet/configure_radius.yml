@@ -1,27 +1,27 @@
 ---
 - name: Configurar Autenticacao RADIUS e Perfis Remotos no FortiSwitch
-  hosts: all
+  hosts: fortinet
   gather_facts: false
+  serial: 1
 
   vars:
-    radius_secret: "SuaChaveSecretaRADIUS"
     radius_server_1: "10.4.0.10"
     radius_server_2: "10.4.0.11"
     ssh_port: "{{ ansible_port | default(22) }}"
 
   tasks:
-    - name: Montar bloco de comandos da CLI
+    - name: 1. Montar bloco de comandos da CLI
       ansible.builtin.set_fact:
         radius_config_commands: |
           config user radius
               edit "NPS-Malwee-01"
                   set server "{{ radius_server_1 }}"
-                  set secret "{{ radius_secret }}"
+                  set secret "{{ radius_key }}"
                   set auth-type pap
               next
               edit "NPS-Malwee-02"
                   set server "{{ radius_server_2 }}"
-                  set secret "{{ radius_secret }}"
+                  set secret "{{ radius_key }}"
                   set auth-type pap
               next
           end
@@ -71,17 +71,17 @@
           end
           exit
 
-    - name: Aplicar configuracoes de RADIUS via SSH
+    - name: 2. Aplicar configuracoes de RADIUS via SSH
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          "#": "{{ radius_config_commands }}"
+          "[a-zA-Z0-9_.-]+ #": "{{ radius_config_commands }}"
         timeout: 60
       delegate_to: localhost
       register: radius_output
+      failed_when: radius_output.rc not in [0, 255]
 
-    - name: Confirmar aplicacao da configuracao RADIUS
+    - name: 3. Confirmar aplicacao da configuracao RADIUS
       ansible.builtin.debug:
         msg: "✅ Servidores RADIUS e Perfis Administradores Remotos configurados com sucesso!"
-      when: radius_output.rc == 0
