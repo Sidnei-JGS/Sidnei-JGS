@@ -13,7 +13,7 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          "[a-zA-Z0-9_.-]+#": 
+          "#": 
             - "no page"
             - "show lldp neighbor-info"
             - "exit"
@@ -22,10 +22,10 @@
       register: lldp_output
       failed_when: lldp_output.rc not in [0, 255]
 
-    - name: 2. Extrair colunas (Porta Local, Porta Remota, Device-name)
-      # O AOS-CX retorna: 1/1/1   1/1/24   00:00:00:00:00:00   SW-CORE
+    - name: 2. Extrair colunas (Porta Local, Porta Remota, Sys-Name)
       ansible.builtin.set_fact:
-        lldp_pairs: "{{ lldp_output.stdout | regex_findall('(?m)^(\\d+/\\d+/\\d+|lag\\d+)\\s+([^\\s]+)\\s+(?:[^\\s]+)\\s+([^\\s\\r\\n]+)') }}"
+        # Grupo 1: Local Port | Grupo 2: Remote Port | Grupo 3: SYS-NAME
+        lldp_pairs: "{{ lldp_output.stdout | regex_findall('(?m)^(\\d+/\\d+/\\d+|lag\\d+)\\s+[a-fA-F0-9:]+\\s+(\\S+)\\s+.*?\\s+\\d+\\s+(\\S+)$') }}"
 
     - name: 3. Filtrar vizinhos e montar nome
       ansible.builtin.set_fact:
@@ -47,25 +47,25 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": 
+          "#": 
             - "config"
             - "interface {{ item.port }}"
             - "description \"to-{{ item.name }}\""
             - "end"
             - "exit"
-        timeout: 15
+        timeout: 30
       delegate_to: localhost
       loop: "{{ valid_lldp_ports | from_json }}"
       when: (valid_lldp_ports | from_json) | length > 0
       register: apply_desc_output
       failed_when: apply_desc_output.rc not in [0, 255]
-      
+
     - name: 5. Salvar configuracao (write memory)
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          "[a-zA-Z0-9_.-]+#": 
+          "#": 
             - "write memory"
             - "exit"
         timeout: 30
@@ -79,7 +79,7 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          "[a-zA-Z0-9_.-]+#": 
+          "#": 
             - "no page"
             - "show interface description | include to-"
             - "exit"
