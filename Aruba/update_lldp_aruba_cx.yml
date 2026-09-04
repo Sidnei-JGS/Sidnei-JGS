@@ -47,16 +47,19 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          "[a-zA-Z0-9_.-]+#": "config\n"
-          "\\(config\\)#": "interface {{ item.port }}\n"
-          "\\(config-if\\)#": "description \"to-{{ item.name }}\"\nexit\nexit\nexit\n"
+          ".*#": 
+            - "config"
+            - "interface {{ item.port }}"
+            - "description \"to-{{ item.name }}\""
+            - "end"
+            - "exit"
         timeout: 15
       delegate_to: localhost
       loop: "{{ valid_lldp_ports | from_json }}"
       when: (valid_lldp_ports | from_json) | length > 0
       register: apply_desc_output
       failed_when: apply_desc_output.rc not in [0, 255]
-
+      
     - name: 5. Salvar configuracao (write memory)
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
