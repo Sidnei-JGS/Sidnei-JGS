@@ -15,8 +15,8 @@
           "(?i)password:": "{{ ansible_password }}\n"
           "#": 
             - "config"
-            - "radius-server host 10.4.0.10 key plaintext O3YaAjwcPLbPBF auth-type pap"
-            - "radius-server host 10.4.0.11 key plaintext O3YaAjwcPLbPBF auth-type pap"
+            - "radius-server host 10.4.0.10 key plaintext {{ radius_key }} auth-type pap"
+            - "radius-server host 10.4.0.11 key plaintext {{ radius_key }} auth-type pap"
             - "aaa authorization allow-fail-through"
             - "aaa authentication allow-fail-through"
             - "aaa authentication login ssh group radius local"
