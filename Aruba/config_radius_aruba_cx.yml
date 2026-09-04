@@ -1,0 +1,51 @@
+---
+- name: Configurar Autenticacao RADIUS no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+
+  tasks:
+    - name: 1. Aplicar configuracoes de RADIUS e AAA
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#": 
+            - "config"
+            - "radius-server host 10.4.0.10 key plaintext O3YaAjwcPLbPBF auth-type pap"
+            - "radius-server host 10.4.0.11 key plaintext O3YaAjwcPLbPBF auth-type pap"
+            - "aaa authorization allow-fail-through"
+            - "aaa authentication allow-fail-through"
+            - "aaa authentication login ssh group radius local"
+            - "aaa authentication login https-server group radius local"
+            - "aaa authentication login console local"
+            - "end"
+            - "write memory"
+            - "exit"
+        timeout: 45
+        echo: true
+      delegate_to: localhost
+      register: radius_output
+      failed_when: radius_output.rc not in [0, 255]
+
+    - name: 2. Validar configuracao aplicada (Auditoria)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#": 
+            - "no page"
+            - "show running-config | include radius"
+            - "show running-config | include aaa"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      register: audit_output
+      failed_when: audit_output.rc not in [0, 255]
+
+    - name: 3. Exibir resultado da aplicacao
+      ansible.builtin.debug:
+        var: audit_output.stdout_lines
