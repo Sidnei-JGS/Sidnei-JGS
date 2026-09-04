@@ -2,6 +2,7 @@
 - name: Sincronizar Descricoes de Portas via LLDP no FortiSwitch
   hosts: all
   gather_facts: false
+  serial: 1
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
@@ -12,14 +13,16 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "get switch lldp neighbors-summary\nexit\n"
+          "[a-zA-Z0-9_.-]+ #": 
+            - "get switch lldp neighbors-summary"
+            - "exit"
         timeout: 30
       delegate_to: localhost
       register: lldp_output
+      failed_when: lldp_output.rc not in [0, 255]
 
     - name: 2. Extrair colunas (Porta, Status, Device-name, Port-ID)
       ansible.builtin.set_fact:
-        # Captura: 0=Porta, 1=Status(Up/Down), 2=Device, 3=Port-ID
         lldp_pairs: "{{ lldp_output.stdout | regex_findall('(port\\d+)\\s+([A-Za-z]+)\\s+([^\\s]+)\\s+[^\\s]+\\s+[^\\s]+\\s+[^\\s]+\\s+([^\\s]+)') }}"
 
     - name: 3. Filtrar vizinhos e montar nome concatenado
@@ -42,24 +45,28 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*SW-201 #": "config switch physical-port\n"
-          ".*\\(physical-port\\) #": "edit {{ item.port }}\n"
-          ".*\\(port.*\\) #": "set description \"to-{{ item.name }}\"\nnext\nend\nexit\n"
+          "[a-zA-Z0-9_.-]+ #": "config switch physical-port\n"
+          "\\(physical-port\\) #": "edit {{ item.port }}\n"
+          "\\(port.*\\) #": "set description \"to-{{ item.name }}\"\nnext\nend\nexit\n"
         timeout: 15
       delegate_to: localhost
       loop: "{{ valid_lldp_ports | from_json }}"
       when: (valid_lldp_ports | from_json) | length > 0
       register: apply_desc_output
+      failed_when: apply_desc_output.rc not in [0, 255]
 
     - name: 5. Consultar status atualizado das portas fisicas
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          ".*#": "show switch physical-port | grep -E 'edit|description'\nexit\n"
+          "[a-zA-Z0-9_.-]+ #": 
+            - "show switch physical-port | grep -E 'edit|description'"
+            - "exit"
         timeout: 30
       delegate_to: localhost
       register: audit_output
+      failed_when: audit_output.rc not in [0, 255]
 
     - name: 6. Exibir resultado da auditoria
       ansible.builtin.debug:
