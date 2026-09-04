@@ -24,8 +24,8 @@
 
     - name: 2. Extrair colunas (Porta Local, Porta Remota, Sys-Name)
       ansible.builtin.set_fact:
-        # Grupo 1: Local Port | Grupo 2: Remote Port | Grupo 3: SYS-NAME
-        lldp_pairs: "{{ lldp_output.stdout | regex_findall('(?m)^(\\d+/\\d+/\\d+|lag\\d+)\\s+[a-fA-F0-9:]+\\s+(\\S+)\\s+.*?\\s+\\d+\\s+(\\S+)$') }}"
+        # Removemos o ^ e $ para ignorar códigos invisíveis do Aruba (ANSI)
+        lldp_pairs: "{{ lldp_output.stdout | regex_findall('([0-9]+/[0-9]+/[0-9]+|lag[0-9]+)\\s+(?:[a-fA-F0-9:]+)\\s+([^\\s]+)\\s+.*?\\s+[0-9]+\\s+([^\\s\\r]+)') }}"
 
     - name: 3. Filtrar vizinhos e montar nome
       ansible.builtin.set_fact:
@@ -42,7 +42,11 @@
           {% endfor %}
           {{ valid | to_json }}
 
-    - name: 4. Aplicar descricao nas interfaces do AOS-CX
+    - name: 4. DEBUG - Mostrar mapeamentos encontrados
+      ansible.builtin.debug:
+        msg: "Serão configuradas as seguintes portas: {{ valid_lldp_ports }}"
+
+    - name: 5. Aplicar descricao nas interfaces do AOS-CX
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
@@ -60,7 +64,7 @@
       register: apply_desc_output
       failed_when: apply_desc_output.rc not in [0, 255]
 
-    - name: 5. Salvar configuracao (write memory)
+    - name: 6. Salvar configuracao (write memory)
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
@@ -74,7 +78,7 @@
       register: save_output
       failed_when: save_output.rc not in [0, 255]
 
-    - name: 6. Consultar status atualizado das interfaces
+    - name: 7. Consultar status atualizado das interfaces
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
@@ -88,6 +92,6 @@
       register: audit_output
       failed_when: audit_output.rc not in [0, 255]
 
-    - name: 7. Exibir resultado da auditoria
+    - name: 8. Exibir resultado da auditoria
       ansible.builtin.debug:
         var: audit_output.stdout_lines
