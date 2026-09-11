@@ -1,6 +1,6 @@
 ---
 - name: Auditoria - Listar VLANs Existentes nos Switches Aruba CX
-  hosts: aruba_switches
+  hosts: aruba_cx
   gather_facts: no
   connection: network_cli
 
