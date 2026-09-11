@@ -1,16 +1,28 @@
 ---
-- name: Auditoria - Listar VLANs Existentes nos Switches Aruba CX
+- name: Listar VLANs nos Switches Aruba AOS-CX
   hosts: aruba_cx
-  gather_facts: no
-  connection: network_cli
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
 
   tasks:
-    - name: Coletar informações de VLANs via CLI do Aruba CX
-      arubanetworks.aoscx.aoscx_command:
-        commands:
-          - show vlan
-      register: resultado_vlan
+    - name: 1. Coletar e Exibir VLANs Existentes via CLI
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#": 
+            - "no page"
+            - "show vlan"
+            - "exit"
+        timeout: 30
+        echo: true
+      delegate_to: localhost
+      register: vlan_output
+      failed_when: vlan_output.rc not in [0, 255]
 
-    - name: Exibir saída do comando no log da execução
+    - name: 2. Exibir saída formatada das VLANs
       ansible.builtin.debug:
-        msg: "{{ resultado_vlan.stdout[0].split('\n') }}"
+        var: vlan_output.stdout_lines
