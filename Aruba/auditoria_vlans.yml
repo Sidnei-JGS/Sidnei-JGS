@@ -1,0 +1,16 @@
+---
+- name: Auditoria - Listar VLANs Existentes nos Switches Aruba CX
+  hosts: aruba_switches
+  gather_facts: no
+  connection: network_cli
+
+  tasks:
+    - name: Coletar informações de VLANs via CLI do Aruba CX
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - show vlan
+      register: resultado_vlan
+
+    - name: Exibir saída do comando no log da execução
+      ansible.builtin.debug:
+        msg: "{{ resultado_vlan.stdout[0].split('\n') }}"
