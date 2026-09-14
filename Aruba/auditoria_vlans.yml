@@ -6,13 +6,15 @@
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
+    ssh_user: "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+    ssh_pass: "{{ ansible_password | default(ansible_ssh_pass | default(ansible_ssh_password)) }}"
 
   tasks:
     - name: 1. Coletar e Exibir VLANs Existentes via CLI
       ansible.builtin.expect:
-        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ssh_user }}@{{ inventory_hostname }}"
         responses:
-          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)password:": "{{ ssh_pass }}\n"
           "#": 
             - "no page"
             - "show vlan"
