@@ -25,6 +25,22 @@
       register: vlan_output
       failed_when: vlan_output.rc not in [0, 255]
 
-    - name: 2. Exibir Apenas a Tabela de VLANs
+        - name: 2. Reconstruir linhas de VLAN quebradas pelo terminal
+      ansible.builtin.set_fact:
+        vlan_rows_json: >-
+          {%- set rows = [] -%}
+          {%- set current = namespace(line='') -%}
+          {%- for line in vlan_output.stdout_lines -%}
+            {%- if line is match('^\s*\d+\s+') -%}
+              {%- if current.line -%}{%- set _ = rows.append(current.line) -%}{%- endif -%}
+              {%- set current.line = line -%}
+            {%- elif current.line and (line is match('^\s*[\d/,\-]+\s*$')) -%}
+              {%- set current.line = current.line ~ ' ' ~ (line | trim) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- if current.line -%}{%- set _ = rows.append(current.line) -%}{%- endif -%}
+          {{ rows | to_json }}
+
+    - name: 3. Exibir tabela de VLANs completa (sem cortes)
       ansible.builtin.debug:
-        msg: "{{ vlan_output.stdout_lines | select('match', '^\\s*\\d+\\s+') | list }}"
+        msg: "{{ vlan_rows_json | from_json }}"
