@@ -25,6 +25,6 @@
       register: vlan_output
       failed_when: vlan_output.rc not in [0, 255]
 
-    - name: 2. Exibir saída formatada das VLANs
+    - name: 2. Exibir Apenas a Tabela de VLANs
       ansible.builtin.debug:
-        var: vlan_output.stdout_lines
+        msg: "{{ vlan_output.stdout_lines | select('match', '^\\s*\\d+\\s+') | list }}"
