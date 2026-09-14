@@ -1,0 +1,66 @@
+---
+- name: Configurar Autenticação RADIUS no Aruba AOS-CX (via arubanetworks.aoscx)
+  hosts: aruba_cx
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+
+  vars:
+    radius_servers:
+      - 10.4.0.10
+      - 10.4.0.11
+    checkpoint_name: "pre-radius-{{ inventory_hostname }}-{{ '%Y%m%d%H%M%S' | strftime }}"
+
+  tasks:
+    - name: 0. Criar checkpoint de configuração antes da mudança
+      arubanetworks.aoscx.aoscx_checkpoint:
+        source_config: running-config
+        destination_config: "{{ checkpoint_name }}"
+
+    - name: 1. Aplicar configurações de RADIUS e AAA (idempotente, sem persistir ainda)
+      arubanetworks.aoscx.aoscx_config:
+        lines:
+          - "radius-server host {{ radius_servers[0] }} key plaintext {{ radius_key }} auth-type pap"
+          - "radius-server host {{ radius_servers[1] }} key plaintext {{ radius_key }} auth-type pap"
+          - "aaa authorization allow-fail-through"
+          - "aaa authentication allow-fail-through"
+          - "aaa authentication login ssh group radius local"
+          - "aaa authentication login https-server group radius local"
+          - "aaa authentication login console local"
+        match: line
+        backup: true
+        save_when: never
+      register: config_result
+      no_log: true
+
+    - name: 2. Coletar running-config para auditoria (RADIUS/AAA)
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "show running-config | include radius"
+          - "show running-config | include aaa"
+      register: audit_output
+      no_log: true
+
+    - name: 3. Exibir resultado da auditoria
+      ansible.builtin.debug:
+        var: audit_output.stdout_lines
+
+    - name: 4. Conferir que a configuração esperada está presente antes de persistir
+      ansible.builtin.assert:
+        that:
+          - "radius_servers[0] | string in (audit_output.stdout | join('\n'))"
+          - "radius_servers[1] | string in (audit_output.stdout | join('\n'))"
+          - "'aaa authentication login ssh group radius local' in (audit_output.stdout | join('\n'))"
+          - "'aaa authentication login console local' in (audit_output.stdout | join('\n'))"
+        fail_msg: >
+          Configuração de RADIUS/AAA não foi encontrada (ou está incompleta)
+          no running-config — abortando ANTES de persistir. Use o checkpoint
+          "{{ checkpoint_name }}" (arubanetworks.aoscx.aoscx_checkpoint,
+          source_config: "{{ checkpoint_name }}", destination_config:
+          running-config) se precisar reverter o que já foi aplicado.
+        success_msg: "Configuração validada no running-config."
+
+    - name: 5. Persistir configuração (equivalente a write memory) somente após validação
+      arubanetworks.aoscx.aoscx_checkpoint:
+        source_config: running-config
+        destination_config: startup-config
