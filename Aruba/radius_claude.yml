@@ -1,0 +1,137 @@
+---
+# Playbook revisado: Configurar Autenticação RADIUS no Aruba AOS-CX
+#
+# Principais mudanças em relação à versão original:
+#   1. no_log: true em todas as tasks que manipulam senha/chave RADIUS
+#      (remove o echo: true, que vazava os comandos — incluindo a chave
+#      RADIUS em texto claro — no stdout/registro do Ansible).
+#   2. Checkpoint de configuração antes de qualquer mudança, para permitir
+#      rollback rápido caso algo dê errado (ex.: "rollback checkpoint <nome>").
+#   3. A validação (auditoria) roda ANTES do "write memory" — só persiste
+#      a configuração se a auditoria confirmar que RADIUS/AAA foram
+#      aplicados corretamente. Na versão original o write memory já tinha
+#      acontecido quando a auditoria rodava.
+#   4. failed_when passa a checar também o conteúdo do stdout (procurando
+#      por "Invalid", "Unknown command", "% ") em vez de confiar apenas em
+#      rc in [0, 255], que mascarava falhas reais de conexão/comando.
+#   5. IPs dos servidores RADIUS extraídos para vars, reutilizáveis por
+#      ambiente/inventário.
+#   6. ansible_password e radius_key devem vir de um vault (ansible-vault) —
+#      não deixe em texto claro no inventário/group_vars.
+#
+# Observações importantes antes de rodar em produção:
+#   - Confirme a sintaxe exata de "checkpoint create" para a versão de
+#     firmware do seu AOS-CX (pode variar entre versões — consulte o guia
+#     de "Checkpoint and Rollback" da sua release).
+#   - StrictHostKeyChecking=no ainda está desabilitado por simplicidade;
+#     o ideal é popular o known_hosts previamente em vez de ignorar a
+#     checagem.
+#   - Para o médio prazo, avalie migrar para a coleção oficial
+#     arubanetworks.aoscx (módulos idempotentes via REST/httpapi), que
+#     elimina a fragilidade do padrão SSH + expect (prompts, paginação,
+#     banners, etc.).
+
+- name: Configurar Autenticação RADIUS no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    radius_servers:
+      - 10.4.0.10
+      - 10.4.0.11
+    checkpoint_name: "pre-radius-{{ inventory_hostname }}-{{ '%Y%m%d%H%M%S' | strftime }}"
+
+  tasks:
+    - name: 0. Criar checkpoint de configuração antes da mudança
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#":
+            - "checkpoint create {{ checkpoint_name }}"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      register: checkpoint_output
+      no_log: true
+      failed_when: >
+        checkpoint_output.rc not in [0, 255]
+        or 'Invalid' in checkpoint_output.stdout
+        or 'Unknown command' in checkpoint_output.stdout
+
+    - name: 1. Aplicar configurações de RADIUS e AAA (sem persistir ainda)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)continue.*\\(y/n\\)": "y\n"
+          "#":
+            - "config"
+            - "radius-server host {{ radius_servers[0] }} key plaintext {{ radius_key }} auth-type pap"
+            - "radius-server host {{ radius_servers[1] }} key plaintext {{ radius_key }} auth-type pap"
+            - "aaa authorization allow-fail-through"
+            - "aaa authentication allow-fail-through"
+            - "aaa authentication login ssh group radius local"
+            - "aaa authentication login https-server group radius local"
+            - "aaa authentication login console local"
+            - "end"
+            - "exit"
+        timeout: 45
+      delegate_to: localhost
+      register: radius_output
+      no_log: true
+      failed_when: >
+        radius_output.rc not in [0, 255]
+        or 'Invalid' in radius_output.stdout
+        or 'Unknown command' in radius_output.stdout
+        or '% ' in radius_output.stdout
+
+    - name: 2. Validar configuração aplicada (auditoria) antes de persistir
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#":
+            - "no page"
+            - "show running-config | include radius"
+            - "show running-config | include aaa"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      register: audit_output
+      no_log: true
+      failed_when: audit_output.rc not in [0, 255]
+
+    - name: 3. Exibir resultado da auditoria
+      ansible.builtin.debug:
+        var: audit_output.stdout_lines
+
+    - name: 4. Conferir que a configuração esperada está presente antes de persistir
+      ansible.builtin.assert:
+        that:
+          - "radius_servers[0] | string in audit_output.stdout"
+          - "radius_servers[1] | string in audit_output.stdout"
+          - "'aaa authentication login ssh group radius local' in audit_output.stdout"
+          - "'aaa authentication login console local' in audit_output.stdout"
+        fail_msg: >
+          Configuração de RADIUS/AAA não foi encontrada (ou está incompleta)
+          no running-config — abortando ANTES do write memory. Use o
+          checkpoint "{{ checkpoint_name }}" se precisar reverter algo que
+          já tenha sido aplicado na running-config.
+        success_msg: "Configuração validada no running-config."
+
+    - name: 5. Persistir configuração (write memory) somente após validação
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#":
+            - "write memory"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      register: write_output
+      no_log: true
+      failed_when: write_output.rc not in [0, 255]
