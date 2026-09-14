@@ -13,9 +13,15 @@
 
   tasks:
     - name: 0. Criar checkpoint de configuração antes da mudança
-      arubanetworks.aoscx.aoscx_checkpoint:
-        source_config: running-config
-        destination_config: "{{ checkpoint_name }}"
+      # Usando aoscx_command (CLI via network_cli) em vez de aoscx_checkpoint
+      # (que exigiria pyaoscx/REST). Sintaxe "copy running-config checkpoint
+      # <nome>" — confirme contra a versão de firmware de vocês em
+      # homologação antes de ir para produção, já que este comando eu não
+      # tinha como validar sem acesso a um switch real.
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "copy running-config checkpoint {{ checkpoint_name }}"
+      register: checkpoint_output
 
     - name: 1. Aplicar configurações de RADIUS e AAA (idempotente, sem persistir ainda)
       arubanetworks.aoscx.aoscx_config:
@@ -54,13 +60,17 @@
           - "'aaa authentication login console local' in (audit_output.stdout | join('\n'))"
         fail_msg: >
           Configuração de RADIUS/AAA não foi encontrada (ou está incompleta)
-          no running-config — abortando ANTES de persistir. Use o checkpoint
-          "{{ checkpoint_name }}" (arubanetworks.aoscx.aoscx_checkpoint,
-          source_config: "{{ checkpoint_name }}", destination_config:
-          running-config) se precisar reverter o que já foi aplicado.
+          no running-config — abortando ANTES de persistir. Para reverter o
+          que já foi aplicado, rode manualmente no switch (ou via
+          aoscx_command): "copy checkpoint {{ checkpoint_name }} running-config".
         success_msg: "Configuração validada no running-config."
 
-    - name: 5. Persistir configuração (equivalente a write memory) somente após validação
-      arubanetworks.aoscx.aoscx_checkpoint:
-        source_config: running-config
-        destination_config: startup-config
+    - name: 5. Persistir configuração (write memory) somente após validação
+      # "write memory" é o comando que já validamos funcionando no ambiente
+      # de vocês (era usado no playbook original com expect). Mantido aqui
+      # por segurança; "copy running-config startup-config" é a forma mais
+      # moderna/canônica no AOS-CX e também deve funcionar, caso prefiram.
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "write memory"
+      register: write_output
