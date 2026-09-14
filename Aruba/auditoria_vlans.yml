@@ -25,7 +25,7 @@
       register: vlan_output
       failed_when: vlan_output.rc not in [0, 255]
 
-        - name: 2. Reconstruir linhas de VLAN quebradas pelo terminal
+    - name: 2. Reconstruir linhas de VLAN quebradas pelo terminal
       ansible.builtin.set_fact:
         vlan_rows_json: >-
           {%- set rows = [] -%}
