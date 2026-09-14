@@ -25,10 +25,6 @@
       register: vlan_output
       failed_when: vlan_output.rc not in [0, 255]
 
-    - name: DEBUG - saída bruta antes do merge
-      ansible.builtin.debug:
-        var: vlan_output.stdout_lines
-
     - name: 2. Reconstruir linhas de VLAN quebradas pelo terminal
       ansible.builtin.set_fact:
         vlan_rows_json: >-
