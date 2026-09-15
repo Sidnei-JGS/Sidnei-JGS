@@ -84,19 +84,19 @@
 # evita que o aoscx_config (que compara match: line contra o
 # running-config literal) marcasse essa linha como "faltando" e tentasse
 # reaplicá-la a cada execução (quebra de idempotência).
-
+ 
 - name: Configurar Autenticação RADIUS no Aruba AOS-CX (via arubanetworks.aoscx)
   hosts: aruba_cx
   gather_facts: false
   serial: "20%"
   max_fail_percentage: 0
-
+ 
   vars:
     radius_servers:
       - 10.4.0.10
       - 10.4.0.11
     checkpoint_name: "pre-radius-{{ inventory_hostname }}-{{ '%Y%m%d%H%M%S' | strftime }}"
-
+ 
   tasks:
     - name: 0. Criar checkpoint de configuração antes da mudança
       # Usando aoscx_command (CLI via network_cli) em vez de aoscx_checkpoint
@@ -117,14 +117,31 @@
       # segura de repetir (sem efeito colateral), adicionamos retry
       # automático em vez de deixar o play inteiro falhar por causa de uma
       # instabilidade transitória.
+      #
+      # CORREÇÃO 4 (observada em homologação, 15/09/2026): descobrimos que
+      # o comando pode retornar "Copying configuration: [Failure]" no
+      # próprio texto de saída SEM que o módulo aoscx_command detecte isso
+      # como erro — ele só verifica se o comando executou e voltou ao
+      # prompt, não o conteúdo da resposta. Isso fazia o playbook seguir
+      # em frente (Tasks 1-5) mesmo sem um checkpoint válido criado.
+      # Adicionamos "failed_when" checando explicitamente por "[Failure]"
+      # no stdout, e incluímos essa mesma checagem no "until" para que o
+      # retry dispare de verdade nesse cenário (não só em erro de conexão).
+      # Suspeita para a causa raiz: o switch acumulou 30+ checkpoints ao
+      # longo do tempo (a maioria gerada automaticamente pelo próprio
+      # AOS-CX) — vale limpar checkpoints antigos ("show checkpoint" para
+      # listar) se esse erro persistir mesmo com o retry.
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config checkpoint {{ checkpoint_name }}"
       register: checkpoint_output
       retries: 3
       delay: 10
-      until: checkpoint_output is succeeded
-
+      until: >
+        checkpoint_output is succeeded
+        and 'Failure' not in (checkpoint_output.stdout[0] | default(''))
+      failed_when: "'Failure' in (checkpoint_output.stdout[0] | default(''))"
+ 
     - name: 1. Aplicar configurações de RADIUS e AAA (idempotente, sem persistir ainda)
       arubanetworks.aoscx.aoscx_config:
         lines:
@@ -140,7 +157,7 @@
         save_when: never
       register: config_result
       no_log: true
-
+ 
     - name: 2. Coletar running-config para auditoria (RADIUS/AAA)
       arubanetworks.aoscx.aoscx_command:
         commands:
@@ -148,11 +165,11 @@
           - "show running-config | include aaa"
       register: audit_output
       no_log: true
-
+ 
     - name: 3. Exibir resultado da auditoria
       ansible.builtin.debug:
         var: audit_output.stdout_lines
-
+ 
     - name: 4. Conferir que a configuração esperada está presente antes de persistir
       ansible.builtin.assert:
         that:
@@ -166,7 +183,7 @@
           que já foi aplicado, rode manualmente no switch (ou via
           aoscx_command): "copy checkpoint {{ checkpoint_name }} running-config".
         success_msg: "Configuração validada no running-config."
-
+ 
     - name: 5. Persistir configuração (write memory) somente após validação
       # "write memory" é o comando que já validamos funcionando no ambiente
       # de vocês (era usado no playbook original com expect). Mantido aqui
