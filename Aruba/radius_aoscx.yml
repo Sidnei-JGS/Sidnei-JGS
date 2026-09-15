@@ -1,4 +1,109 @@
 ---
+# Playbook alternativo: Configurar Autenticação RADIUS no Aruba AOS-CX
+# usando a coleção oficial arubanetworks.aoscx (via SSH estruturado —
+# network_cli — em vez de SSH bruto + ansible.builtin.expect).
+#
+# Testado por mim contra a coleção arubanetworks.aoscx 4.5.2 instalada via
+# `ansible-galaxy collection install arubanetworks.aoscx` (puxa junto
+# ansible.netcommon e ansible.utils como dependências). Os módulos e
+# parâmetros abaixo foram conferidos com `ansible-doc` nessa versão real —
+# não são um exemplo genérico "de memória".
+#
+# Achado importante ao investigar a coleção: ela NÃO tem um módulo
+# dedicado para RADIUS/AAA. Isso está documentado no próprio repositório
+# da coleção (arquivo cx_oas_missing_features.txt), que lista
+# explicitamente "AAA", "AAA Server Groups" e "RADIUS Server" como
+# recursos ainda não cobertos por um módulo estruturado. Então, diferente
+# do que eu tinha sugerido inicialmente (um módulo tipo aoscx_radius_server),
+# a forma correta de fazer isso com essa coleção hoje é via
+# arubanetworks.aoscx.aoscx_config, que é um módulo declarativo de linhas
+# de CLI (no mesmo estilo do ios_config/eos_config), mas que continua
+# resolvendo os problemas estruturais do playbook original:
+#
+#   - Idempotência real: aoscx_config compara as "lines" com o
+#     running-config atual do switch e só envia o que estiver faltando ou
+#     diferente (match: line, o padrão). changed=true só quando algo
+#     realmente muda.
+#   - Sem parsing de prompt/paginação/banner: a conexão é feita pelo
+#     driver network_cli da própria coleção (plugins/cliconf/aoscx.py),
+#     não por um "ssh manual" com regex esperando "#".
+#   - Erro estruturado: se uma linha for rejeitada pelo switch, o módulo
+#     falha a task de forma limpa, sem precisar caçar "Invalid"/"% " no
+#     stdout.
+#   - backup: true tira uma cópia do running-config atual antes de
+#     mexer, e save_when controla quando persistir pra startup-config
+#     (equivalente ao "write memory"), como fizemos manualmente na
+#     versão anterior.
+#
+# CORREÇÃO (depois de ver o erro real no AWX: "No module named 'pyaoscx'"):
+# eu tinha sugerido usar arubanetworks.aoscx.aoscx_checkpoint para o
+# checkpoint inicial e para persistir a config no final. Ao investigar o
+# código-fonte do módulo (não só a doc), descobri que aoscx_checkpoint é
+# implementado sobre a biblioteca Python `pyaoscx` e fala com a API REST
+# do switch diretamente — é um transporte DIFERENTE de aoscx_config e
+# aoscx_command, que são puramente CLI via network_cli. A própria coleção
+# mistura os dois estilos internamente (isso não fica claro lendo só a
+# documentação de cada módulo isolado), e não dá pra usar os dois
+# transportes com uma variável de conexão só por host sem complicar o
+# inventário. Pra manter o playbook simples e 100% no transporte que já
+# validamos funcionando no ambiente de vocês (network_cli), troquei os
+# dois usos de aoscx_checkpoint por comandos de CLI crua via
+# arubanetworks.aoscx.aoscx_command — sem precisar instalar `pyaoscx` via
+# pip na Execution Environment nem misturar tipo de conexão no mesmo
+# playbook.
+#
+# Prós-requisitos:
+#   1. Collection instalada no controller/EE do AWX:
+#        ansible-galaxy collection install arubanetworks.aoscx
+#      (ou via requirements.yml do Project, que é o padrão em AWX).
+#   2. Variáveis de conexão no inventário/group_vars (NÃO são segredo,
+#      podem ficar no aruba.ini/group_vars versionado no Git):
+#        ansible_network_os: arubanetworks.aoscx.aoscx
+#        ansible_connection: network_cli
+#      ansible_user / ansible_password continuam vindo da Machine
+#      Credential do AWX, exatamente como já está configurado — nada
+#      muda nesse ponto. radius_key continua vindo da Custom Credential
+#      Type ("Minha Senha RADIUS"), também sem mudança.
+#   3. Como a conexão agora é feita pelo próprio Ansible (network_cli)
+#      em vez de um "ssh manual" via delegate_to: localhost, o problema
+#      de hostvars[inventory_hostname] que corrigimos na versão anterior
+#      deixa de existir — não há mais delegação, então
+#      ansible_user/ansible_password são resolvidos normalmente para o
+#      host de destino.
+#
+# CORREÇÃO 2 (confirmada em teste real no switch de homologação,
+# 192.168.2.128, em 15/09/2026): a Task 4 (assert) falhava procurando o
+# texto literal "aaa authentication login console local" no audit, mesmo
+# a configuração tendo sido aplicada com sucesso (Task 1 reportou
+# changed=true). O motivo: o AOS-CX trata "local" como um grupo de
+# autenticação especial, igual "radius", e sempre normaliza o comando no
+# running-config para incluir a palavra "group" — mesmo quando ela não é
+# digitada. O running-config real ficou "aaa authentication login console
+# group local", não "... console local". Corrigido aplicando e
+# verificando a forma canônica "group local" diretamente — isso também
+# evita que o aoscx_config (que compara match: line contra o
+# running-config literal) marcasse essa linha como "faltando" e tentasse
+# reaplicá-la a cada execução (quebra de idempotência).
+
+- name: Configurar Autenticação RADIUS no Aruba AOS-CX (via arubanetworks.aoscx)
+  hosts: aruba_cx
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+
+  vars:
+    radius_servers:
+      - 10.4.0.10
+      - 10.4.0.11
+    checkpoint_name: "pre-radius-{{ inventory_hostname }}-{{ '%Y%m%d%H%M%S' | strftime }}"
+
+  tasks:
+    - name: 0. Criar checkpoint de configuração antes da mudança
+      # Usando aoscx_command (CLI via network_cli) em vez de aoscx_checkpoint
+      # (que exigiria pyaoscx/REST). Sintaxe "copy running-config checkpoint
+      # <nome>" — confirme contra a versão de firmware de vocês em
+      # homologação antes de ir para produção, já que este comando eu não
+      # tinha como validar sem acesso a um switch real.
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config checkpoint {{ checkpoint_name }}"
