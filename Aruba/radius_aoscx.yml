@@ -101,13 +101,29 @@
     - name: 0. Criar checkpoint de configuração antes da mudança
       # Usando aoscx_command (CLI via network_cli) em vez de aoscx_checkpoint
       # (que exigiria pyaoscx/REST). Sintaxe "copy running-config checkpoint
-      # <nome>" — confirme contra a versão de firmware de vocês em
-      # homologação antes de ir para produção, já que este comando eu não
-      # tinha como validar sem acesso a um switch real.
+      # <nome>" — confirmada funcionando em homologação.
+      #
+      # CORREÇÃO 3 (observada em homologação, 15/09/2026): essa task falha
+      # de forma intermitente com "command timeout triggered, timeout value
+      # is 30 secs", mesmo o comando completando em segundos quando testado
+      # manualmente no switch. Já descartamos: limite de checkpoints
+      # armazenados (testado com 33 checkpoints acumulados, sem prompt de
+      # confirmação), comandos inválidos no setup automático da conexão
+      # (no page / terminal width, que retornam erro na hora, sem travar) e
+      # timeout de autenticação (resolvido à parte com ansible-pylibssh).
+      # A causa raiz remanescente parece ser uma instabilidade pontual de
+      # conexão/timing entre o network_cli e o switch — não reproduzível
+      # de forma determinística. Como recriar um checkpoint é uma operação
+      # segura de repetir (sem efeito colateral), adicionamos retry
+      # automático em vez de deixar o play inteiro falhar por causa de uma
+      # instabilidade transitória.
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config checkpoint {{ checkpoint_name }}"
       register: checkpoint_output
+      retries: 3
+      delay: 10
+      until: checkpoint_output is succeeded
 
     - name: 1. Aplicar configurações de RADIUS e AAA (idempotente, sem persistir ainda)
       arubanetworks.aoscx.aoscx_config:
