@@ -1,23 +1,4 @@
 ---
-- name: Configurar Autenticação RADIUS no Aruba AOS-CX (via arubanetworks.aoscx)
-  hosts: aruba_cx
-  gather_facts: false
-  serial: "20%"
-  max_fail_percentage: 0
-
-  vars:
-    radius_servers:
-      - 10.4.0.10
-      - 10.4.0.11
-    checkpoint_name: "pre-radius-{{ inventory_hostname }}-{{ '%Y%m%d%H%M%S' | strftime }}"
-
-  tasks:
-    - name: 0. Criar checkpoint de configuração antes da mudança
-      # Usando aoscx_command (CLI via network_cli) em vez de aoscx_checkpoint
-      # (que exigiria pyaoscx/REST). Sintaxe "copy running-config checkpoint
-      # <nome>" — confirme contra a versão de firmware de vocês em
-      # homologação antes de ir para produção, já que este comando eu não
-      # tinha como validar sem acesso a um switch real.
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config checkpoint {{ checkpoint_name }}"
@@ -32,7 +13,7 @@
           - "aaa authentication allow-fail-through"
           - "aaa authentication login ssh group radius local"
           - "aaa authentication login https-server group radius local"
-          - "aaa authentication login console local"
+          - "aaa authentication login console group local"
         match: line
         backup: true
         save_when: never
@@ -57,7 +38,7 @@
           - "radius_servers[0] | string in (audit_output.stdout | join('\n'))"
           - "radius_servers[1] | string in (audit_output.stdout | join('\n'))"
           - "'aaa authentication login ssh group radius local' in (audit_output.stdout | join('\n'))"
-          - "'aaa authentication login console local' in (audit_output.stdout | join('\n'))"
+          - "'aaa authentication login console group local' in (audit_output.stdout | join('\n'))"
         fail_msg: >
           Configuração de RADIUS/AAA não foi encontrada (ou está incompleta)
           no running-config — abortando ANTES de persistir. Para reverter o
