@@ -6,14 +6,24 @@
   max_fail_percentage: 0
 
   vars:
-    # Nome do usuário a ser removido
-    user_to_delete: "ghidorah"
+    # Captura o usuário informado via Survey/Extra Vars no AWX.
+    # Caso nenhum seja digitado, o padrão de segurança é 'admin_temp' (evita deletar acidentalmente o usuário principal).
+    target_user: "{{ user_to_delete | default('admin_temp') }}"
 
   tasks:
+    - name: 0. Validar se o usuário a ser deletado não é o próprio usuário da conexão ativa
+      ansible.builtin.assert:
+        that:
+          - "target_user != (ansible_user | default(ansible_ssh_user))"
+        fail_msg: >
+          ABORTADO POR SEGURANÇA: Você está tentando deletar o usuário '{{ target_user }}',
+          que é a mesma conta utilizada pelo Ansible para se conectar no switch!
+        success_msg: "Validação de segurança aprovada: '{{ target_user }}' não é a conta da sessão ativa."
+
     - name: 1. Remover usuário do running-config (idempotente)
       arubanetworks.aoscx.aoscx_config:
         lines:
-          - "no user {{ user_to_delete }}"
+          - "no user {{ target_user }}"
         match: line
         backup: true
         save_when: never
@@ -25,18 +35,22 @@
           - "show running-config | include user"
       register: audit_user_output
 
-    - name: 3. Conferir se o usuário foi realmente removido
+    - name: 3. Exibir resultado da auditoria (mascarando senhas)
+      ansible.builtin.debug:
+        msg: "{{ audit_user_output.stdout_lines | flatten | reject('search', 'password') | list }}"
+
+    - name: 4. Conferir se o usuário foi realmente removido
       vars:
         saida_audit: "{{ audit_user_output.stdout | flatten | join('\n') }}"
       ansible.builtin.assert:
         that:
-          - "'user ' + user_to_delete + ' ' not in saida_audit"
+          - "'user ' + target_user + ' ' not in saida_audit"
         fail_msg: >
-          ALERTA: O usuário {{ user_to_delete }} ainda consta no running-config.
+          ALERTA: O usuário '{{ target_user }}' ainda consta no running-config.
           Abortando persistência!
-        success_msg: "Confirmado: O usuário {{ user_to_delete }} foi removido com sucesso."
+        success_msg: "Confirmado: O usuário '{{ target_user }}' foi removido com sucesso."
 
-    - name: 4. Persistir configuração no startup-config apenas se houve remoção
+    - name: 5. Persistir configuração no startup-config apenas se houve remoção
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config startup-config"
