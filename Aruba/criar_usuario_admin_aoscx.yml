@@ -1,0 +1,49 @@
+---
+- name: Criar/Atualizar Usuário Administrador Local no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+
+  vars:
+    # Defina o nome do usuário a ser criado
+    novo_admin_user: "ghidorah"
+    # A senha deve ser informada via Extra Vars ou Credencial do AWX (novo_admin_password)
+
+  tasks:
+    - name: 1. Aplicar criação do usuário admin no running-config (idempotente)
+      arubanetworks.aoscx.aoscx_config:
+        lines:
+          - "user {{ novo_admin_user }} group administrators password plaintext {{ novo_admin_password }}"
+        match: line
+        backup: true
+        save_when: never
+      register: user_create_result
+      no_log: true
+
+    - name: 2. Coletar running-config de usuários para auditoria
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "show running-config | include user"
+      register: audit_user_output
+
+    - name: 3. Exibir resultado da auditoria (mascarando senhas)
+      ansible.builtin.debug:
+        msg: "{{ audit_user_output.stdout_lines | flatten | reject('search', 'password') | list }}"
+
+    - name: 4. Conferir se o usuário e grupo correto estão configurados
+      vars:
+        saida_audit: "{{ audit_user_output.stdout | flatten | join('\n') }}"
+      ansible.builtin.assert:
+        that:
+          - "'user ' + novo_admin_user + ' group administrators' in saida_audit"
+        fail_msg: >
+          O usuário {{ novo_admin_user }} não foi encontrado com o grupo 'administrators'
+          no running-config. Abortando ANTES de persistir.
+        success_msg: "Usuário {{ novo_admin_user }} validado com sucesso como administrator."
+
+    - name: 5. Persistir configuração no startup-config apenas se alterado
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "copy running-config startup-config"
+      when: user_create_result.changed
