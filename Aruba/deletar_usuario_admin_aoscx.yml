@@ -1,0 +1,43 @@
+---
+- name: Deletar Usuário Administrador Local no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+
+  vars:
+    # Nome do usuário a ser removido
+    user_to_delete: "ghidorah"
+
+  tasks:
+    - name: 1. Remover usuário do running-config (idempotente)
+      arubanetworks.aoscx.aoscx_config:
+        lines:
+          - "no user {{ user_to_delete }}"
+        match: line
+        backup: true
+        save_when: never
+      register: user_delete_result
+
+    - name: 2. Coletar running-config de usuários para auditoria
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "show running-config | include user"
+      register: audit_user_output
+
+    - name: 3. Conferir se o usuário foi realmente removido
+      vars:
+        saida_audit: "{{ audit_user_output.stdout | flatten | join('\n') }}"
+      ansible.builtin.assert:
+        that:
+          - "'user ' + user_to_delete + ' ' not in saida_audit"
+        fail_msg: >
+          ALERTA: O usuário {{ user_to_delete }} ainda consta no running-config.
+          Abortando persistência!
+        success_msg: "Confirmado: O usuário {{ user_to_delete }} foi removido com sucesso."
+
+    - name: 4. Persistir configuração no startup-config apenas se houve remoção
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "copy running-config startup-config"
+      when: user_delete_result.changed
