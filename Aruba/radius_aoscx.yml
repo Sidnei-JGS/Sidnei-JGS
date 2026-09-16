@@ -146,6 +146,32 @@
       # um timeout genuíno como falha — inclusive fazendo o retry disparar
       # de verdade nesse caso, e falhando o play (protegendo as tasks
       # seguintes) se as 3 tentativas se esgotarem.
+      #
+      # CORREÇÃO 6 (observada em homologação, 16/09/2026): mesmo com a
+      # lista de checkpoints praticamente vazia (limpamos manualmente,
+      # sobrando só o "startup-config"), o comando falhou de forma 100%
+      # consistente nas 4 tentativas (não mais intermitente) — descartando
+      # de vez a teoria do volume de checkpoints. Reparamos que a Task 5
+      # ("write memory") usa o MESMO estilo de saída interativa
+      # (spinner "[\|/-]...[Success]") e nunca falhou em nenhum teste —
+      # então não é a exibição interativa em si que quebra na sessão
+      # automatizada, é algo específico da operação de criar um
+      # checkpoint NOMEADO novo (different de sobrescrever o
+      # startup-config fixo). Isso tem cara de particularidade/bug do
+      # firmware nessa operação específica sob sessão SSH não-interativa
+      # — abrimos um caso com o suporte HPE/Aruba pra investigar a fundo
+      # (versão PL.10.17.0001, switch 6100).
+      #
+      # Enquanto isso, tornamos essa task "best effort" (ignore_errors)
+      # em vez de bloquear o play inteiro: a rede de segurança real já
+      # não depende dela — a Task 1 usa "backup: true", que salva uma
+      # cópia do running-config localmente no controller ANTES de
+      # qualquer mudança, independente do switch conseguir criar o
+      # checkpoint nomeado; e a Task 4 (assert) já impede a persistência
+      # se a config aplicada não bater com o esperado. O checkpoint
+      # nomeado continua sendo tentado (com retry) porque, quando
+      # funciona, é uma forma rápida de rollback direto no switch — só
+      # não é mais um requisito para prosseguir.
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config checkpoint {{ checkpoint_name }}"
@@ -155,6 +181,17 @@
       until: >
         checkpoint_output is succeeded
         and 'Failure' not in (checkpoint_output.stdout[0] | default(''))
+      ignore_errors: true
+
+    - name: 0b. Avisar se o checkpoint nomeado não foi criado
+      ansible.builtin.debug:
+        msg: >
+          AVISO: não foi possível criar o checkpoint nomeado
+          "{{ checkpoint_name }}" após 3 tentativas (falha conhecida,
+          em investigação com o suporte HPE — ver comentários da Task 0).
+          Prosseguindo mesmo assim: a Task 1 já mantém um backup local
+          do running-config (backup: true) como rede de segurança.
+      when: checkpoint_output is failed
 
     - name: 1. Aplicar configurações de RADIUS e AAA (idempotente, sem persistir ainda)
       arubanetworks.aoscx.aoscx_config:
