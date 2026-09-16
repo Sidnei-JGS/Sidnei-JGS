@@ -124,13 +124,28 @@
       # como erro — ele só verifica se o comando executou e voltou ao
       # prompt, não o conteúdo da resposta. Isso fazia o playbook seguir
       # em frente (Tasks 1-5) mesmo sem um checkpoint válido criado.
-      # Adicionamos "failed_when" checando explicitamente por "[Failure]"
-      # no stdout, e incluímos essa mesma checagem no "until" para que o
-      # retry dispare de verdade nesse cenário (não só em erro de conexão).
       # Suspeita para a causa raiz: o switch acumulou 30+ checkpoints ao
       # longo do tempo (a maioria gerada automaticamente pelo próprio
       # AOS-CX) — vale limpar checkpoints antigos ("show checkpoint" para
       # listar) se esse erro persistir mesmo com o retry.
+      #
+      # CORREÇÃO 5 (revertendo parte da Correção 4, observada em
+      # homologação, 16/09/2026): a primeira tentativa de corrigir isso
+      # usou "failed_when" checando só por "[Failure]" no stdout — mas
+      # "failed_when" SUBSTITUI completamente a detecção padrão de
+      # sucesso/falha do Ansible, não complementa. Resultado: um timeout
+      # de conexão de verdade (sem nenhum stdout, checkpoint nunca criado)
+      # deixou de ser reconhecido como falha, porque a condição só olhava
+      # para o texto "[Failure]" — que nem chega a existir quando o
+      # comando trava por timeout. Isso mascarou um timeout real como
+      # sucesso ("attempts": 1, task "ok") e o play seguiu em frente sem
+      # nenhum checkpoint válido. Removido o "failed_when": o "until"
+      # abaixo já cobre os dois cenários (falha de conexão/timeout via
+      # "is succeeded", E o "[Failure]" explícito no texto), e sem a
+      # sobrescrita do failed_when o Ansible volta a tratar corretamente
+      # um timeout genuíno como falha — inclusive fazendo o retry disparar
+      # de verdade nesse caso, e falhando o play (protegendo as tasks
+      # seguintes) se as 3 tentativas se esgotarem.
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config checkpoint {{ checkpoint_name }}"
@@ -140,7 +155,6 @@
       until: >
         checkpoint_output is succeeded
         and 'Failure' not in (checkpoint_output.stdout[0] | default(''))
-      failed_when: "'Failure' in (checkpoint_output.stdout[0] | default(''))"
 
     - name: 1. Aplicar configurações de RADIUS e AAA (idempotente, sem persistir ainda)
       arubanetworks.aoscx.aoscx_config:
