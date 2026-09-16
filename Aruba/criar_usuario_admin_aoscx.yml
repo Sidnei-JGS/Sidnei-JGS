@@ -26,9 +26,9 @@
           - "show running-config | include user"
       register: audit_user_output
 
-    - name: 3. Exibir resultado da auditoria (mascarando senhas)
+    - name: 3. Exibir resultado da auditoria (mascarando hashes)
       ansible.builtin.debug:
-        msg: "{{ audit_user_output.stdout_lines | flatten | reject('search', 'password') | list }}"
+        msg: "{{ audit_user_output.stdout_lines | flatten | map('regex_replace', 'password (ciphertext|plaintext) \\S+', 'password ********') | list }}"
 
     - name: 4. Conferir se o usuário e grupo correto estão configurados
       vars:
