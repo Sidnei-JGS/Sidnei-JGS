@@ -7,7 +7,6 @@
 
   vars:
     target_user: "{{ user_to_delete | default('admin_temp') }}"
-    # Aumenta o tempo limite para respostas de comandos no CLI do Aruba
     ansible_command_timeout: 60
     ansible_connect_timeout: 60
 
@@ -21,13 +20,14 @@
           que é a mesma conta utilizada pelo Ansible para se conectar no switch!
         success_msg: "Validação de segurança aprovada: '{{ target_user }}' não é a conta da sessão ativa."
 
-    - name: 1. Remover usuário do running-config (idempotente)
-      arubanetworks.aoscx.aoscx_config:
-        lines:
-          - "no user {{ target_user }}"
-        match: line
-        backup: true
-        save_when: never
+    - name: 1. Remover usuário com tratamento do prompt de confirmação (y/n)
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - command: "configure terminal"
+          - command: "no user {{ target_user }}"
+            prompt: ".*[C|c]ontinue.*"
+            answer: "y"
+          - command: "exit"
       register: user_delete_result
 
     - name: 2. Coletar running-config de usuários para auditoria
@@ -51,8 +51,7 @@
           Abortando persistência!
         success_msg: "Confirmado: O usuário '{{ target_user }}' foi removido com sucesso."
 
-    - name: 5. Persistir configuração no startup-config apenas se houve remoção
+    - name: 5. Salvar alterações no startup-config
       arubanetworks.aoscx.aoscx_command:
         commands:
           - "copy running-config startup-config"
-      when: user_delete_result.changed
