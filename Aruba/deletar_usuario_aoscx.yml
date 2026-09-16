@@ -6,9 +6,10 @@
   max_fail_percentage: 0
 
   vars:
-    # Captura o usuário informado via Survey/Extra Vars no AWX.
-    # Caso nenhum seja digitado, o padrão de segurança é 'admin_temp' (evita deletar acidentalmente o usuário principal).
     target_user: "{{ user_to_delete | default('admin_temp') }}"
+    # Aumenta o tempo limite para respostas de comandos no CLI do Aruba
+    ansible_command_timeout: 60
+    ansible_connect_timeout: 60
 
   tasks:
     - name: 0. Validar se o usuário a ser deletado não é o próprio usuário da conexão ativa
