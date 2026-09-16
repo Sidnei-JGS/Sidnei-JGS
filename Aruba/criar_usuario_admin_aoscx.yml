@@ -6,9 +6,9 @@
   max_fail_percentage: 0
 
   vars:
-    # Defina o nome do usuário a ser criado
-    novo_admin_user: "ghidorah"
-    # A senha deve ser informada via Extra Vars ou Credencial do AWX (novo_admin_password)
+    # Captura o usuário e senha injetados automaticamente pela Machine Credential do AWX
+    novo_admin_user: "{{ custom_admin_user | default(ansible_user | default('ghidorah')) }}"
+    novo_admin_password: "{{ custom_admin_pass | default(ansible_password | default(ansible_ssh_pass)) }}"
 
   tasks:
     - name: 1. Aplicar criação do usuário admin no running-config (idempotente)
@@ -19,7 +19,6 @@
         backup: true
         save_when: never
       register: user_create_result
-      no_log: true
 
     - name: 2. Coletar running-config de usuários para auditoria
       arubanetworks.aoscx.aoscx_command:
