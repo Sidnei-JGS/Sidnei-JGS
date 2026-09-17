@@ -1,1 +1,6 @@
-
+---
+collections:
+  - name: arubanetworks.aoscx
+  - name: fortinet.fortiswitch
+  - name: fortinet.fortios
+  - name: ansible.netcommon
