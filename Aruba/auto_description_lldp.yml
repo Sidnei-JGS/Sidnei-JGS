@@ -48,12 +48,11 @@
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ssh_user }}@{{ inventory_hostname }}"
         responses:
-          "(?i)password:": "{{ ssh_pass }}\n"
+          "(?i)password:": "{{ ssh_pass }}"
           "#":
             - "configure terminal"
             - "interface {{ item.port }}"
             - "description {{ item.desc }}"
-            - "exit"
             - "write memory"
             - "exit"
         timeout: 30
