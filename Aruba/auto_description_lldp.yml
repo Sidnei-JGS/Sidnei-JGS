@@ -1,0 +1,63 @@
+---
+- name: Auto-description de Portas via LLDP (Aruba CX)
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    ssh_user: "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+    ssh_pass: "{{ ansible_password | default(ansible_ssh_pass | default(ansible_ssh_password)) }}"
+
+  tasks:
+    - name: 1. Coletar Neighbors do LLDP via CLI
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ssh_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ssh_pass }}\n"
+          "#": 
+            - "no page"
+            - "show lldp neighbor-info"
+            - "exit"
+        timeout: 30
+        echo: true
+      delegate_to: localhost
+      register: lldp_output
+      failed_when: lldp_output.rc not in [0, 255]
+
+    - name: 2. Processar e Mapear Portas e Nomes do LLDP
+      ansible.builtin.set_fact:
+        lldp_mappings: >-
+          {%- set mappings = [] -%}
+          {%- for line in lldp_output.stdout_lines -%}
+            {%- set parts = line.split() -%}
+            {%- if parts | length >= 6 and parts[0].startswith('1/') and parts[-1] != '-' -%}
+              {%- set local_port = parts[0] -%}
+              {%- set port_id = parts[2] -%}
+              {%- set sys_name = parts[-1] -%}
+              {%- set _ = mappings.append({'port': local_port, 'desc': 'to-' ~ sys_name ~ '-' ~ port_id}) -%}
+            {%- endif -%}
+          {%- Per -%}
+          {{ mappings }}
+
+    - name: 3. Exibir mapeamento de descriptions encontradas
+      ansible.builtin.debug:
+        var: lldp_mappings
+
+    - name: 4. Aplicar Auto-description nas Portas
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ssh_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ssh_pass }}\n"
+          "#":
+            - "configure terminal"
+            - "interface {{ item.port }}"
+            - "description {{ item.desc }}"
+            - "exit"
+            - "write memory"
+            - "exit"
+        timeout: 30
+        echo: true
+      delegate_to: localhost
+      loop: "{{ lldp_mappings }}"
+      when: lldp_mappings | length > 0
