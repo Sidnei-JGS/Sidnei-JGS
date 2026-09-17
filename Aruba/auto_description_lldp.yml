@@ -37,7 +37,7 @@
               {%- set sys_name = parts[-1] -%}
               {%- set _ = mappings.append({'port': local_port, 'desc': 'to-' ~ sys_name ~ '-' ~ port_id}) -%}
             {%- endif -%}
-          {%- Per -%}
+          {%- endfor -%}
           {{ mappings }}
 
     - name: 3. Exibir mapeamento de descriptions encontradas
