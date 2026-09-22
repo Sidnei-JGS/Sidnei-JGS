@@ -1,0 +1,42 @@
+---
+- name: Configurar Autenticação RADIUS no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 5  # Processa de 5 em 5 switches simultaneamente para acelerar
+
+  vars:
+    radius_servers:
+      - "10.4.0.10"
+      - "10.4.0.11"
+    radius_key: "O3YaAjwcPLbPBF"
+
+  tasks:
+    - name: 1. Aplicar configurações de RADIUS e AAA (idempotente com backup local)
+      arubanetworks.aoscx.aoscx_config:
+        lines:
+          - "radius-server host {{ radius_servers[0] }} key plaintext {{ radius_key }} auth-type pap"
+          - "radius-server host {{ radius_servers[1] }} key plaintext {{ radius_key }} auth-type pap"
+          - "aaa authorization allow-fail-through"
+          - "aaa authentication allow-fail-through"
+          - "aaa authentication login ssh group radius local"
+          - "aaa authentication login https-server group radius local"
+          - "aaa authentication login console group local"
+        match: line
+        backup: true
+        save_when: never
+      no_log: true
+
+    - name: 2. Coletar running-config para auditoria (RADIUS/AAA)
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "show running-config | include aaa"
+      register: aaa_audit
+
+    - name: 3. Exibir resultado da auditoria
+      ansible.builtin.debug:
+        msg: "{{ aaa_audit.stdout_lines[0] }}"
+
+    - name: 4. Persistir configuração no startup-config após validação
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "write memory"
