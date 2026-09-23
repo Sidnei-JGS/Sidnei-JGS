@@ -9,36 +9,37 @@
     radius_server_2: "10.4.0.11"
     domain_name: "malwee.com.br"
     ssh_port: "{{ ansible_port | default(22) }}"
+    # Captura automaticamente a chave das credenciais salvas no AWX
     radius_key: "{{ minha_senha_radius | default(secret_key | default(radius_secret | default(secret | default(password | default(lookup('ansible.builtin.env', 'RADIUS_SECRET')))))) }}"
 
   tasks:
-    - name: 1. Aplicar comandos sequenciais no HP Comware v5
-      ansible.netcommon.cli_command:
-        command: "{{ item }}"
-      loop:
-        - "system-view"
-        - "radius scheme radius_scheme_malwee"
-        - "primary authentication {{ radius_server_1 }}"
-        - "secondary authentication {{ radius_server_2 }}"
-        - "key authentication simple {{ radius_key }}"
-        - "user-name-format without-domain"
-        - "quit"
-        - "domain {{ domain_name }}"
-        - "authentication default radius-scheme radius_scheme_malwee local"
-        - "authorization default radius-scheme radius_scheme_malwee local"
-        - "accounting default radius-scheme radius_scheme_malwee local"
-        - "access-limit disable"
-        - "state active"
-        - "idle-cut disable"
-        - "self-service-url disable"
-        - "quit"
-        - "domain default enable {{ domain_name }}"
-        - "save force"
-        - "return"
-      vars:
-        ansible_connection: network_cli
-        ansible_network_os: comware
+    - name: 1. Enviar bloco de comandos via fluxo SSH TT no Comware 5
+      ansible.builtin.shell: |
+        sshpass -p "{{ ansible_password }}" ssh -tt -o StrictHostKeyChecking=no -o KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group14-sha1 -o Ciphers=+aes128-cbc,3des-cbc -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }} << 'EOF'
+        system-view
+        radius scheme radius_scheme_malwee
+        primary authentication {{ radius_server_1 }}
+        secondary authentication {{ radius_server_2 }}
+        key authentication simple {{ radius_key }}
+        user-name-format without-domain
+        quit
+        domain {{ domain_name }}
+        authentication default radius-scheme radius_scheme_malwee local
+        authorization default radius-scheme radius_scheme_malwee local
+        accounting default radius-scheme radius_scheme_malwee local
+        access-limit disable
+        state active
+        idle-cut disable
+        self-service-url disable
+        quit
+        domain default enable {{ domain_name }}
+        save force
+        return
+        quit
+        EOF
+      delegate_to: localhost
+      register: comware_ssh_output
 
-    - name: 2. Confirmar aplicacao das configuracoes
+    - name: 2. Exibir resposta completa da CLI do Comware 5
       ansible.builtin.debug:
-        msg: "✅ Autenticação RADIUS e Domínio AAA configurados e salvos com sucesso no switch {{ inventory_hostname }}!"
+        var: comware_ssh_output.stdout_lines
