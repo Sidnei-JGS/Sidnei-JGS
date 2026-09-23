@@ -1,0 +1,62 @@
+---
+- name: Configurar Autenticação RADIUS e AAA no FortiSwitch
+  hosts: fortinet
+  gather_facts: false
+  serial: 5  # Processa em lotes de 5 switches simultaneamente
+
+  vars:
+    radius_servers:
+      - ip: "10.4.0.10"
+        name: "RADIUS_NPS_01"
+      - ip: "10.4.0.11"
+        name: "RADIUS_NPS_02"
+    # A chave é lida preferencialmente das Extra Vars do AWX/Inventário protegida por Vault
+    radius_key: "{{ vault_radius_key | default(radius_secret | default('')) }}"
+    ssh_port: "{{ ansible_port | default(22) }}"
+    ssh_user: "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+    ssh_pass: "{{ ansible_password | default(ansible_ssh_pass | default(ansible_ssh_password)) }}"
+
+  tasks:
+    - name: 1. Configurar Servidores RADIUS no FortiSwitch (Ocultado)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ssh_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ssh_pass }}"
+          "#": "config user radius ; edit {{ radius_servers[0].name }} ; set server {{ radius_servers[0].ip }} ; set secret {{ radius_key }} ; set auth-type pap ; next ; edit {{ radius_servers[1].name }} ; set server {{ radius_servers[1].ip }} ; set secret {{ radius_key }} ; set auth-type pap ; next ; end"
+        timeout: 30
+        echo: false
+      delegate_to: localhost
+      no_log: true  # Mascara o output e impede o vazamento da chave no log do AWX
+
+    - name: 2. Configurar Grupos de Usuários e Admins Remotos RADIUS
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ssh_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ssh_pass }}"
+          "#": "config user group ; edit Admin-RW-Malwee ; set member {{ radius_servers[0].name }} {{ radius_servers[1].name }} ; next ; edit Admin-R-Malwee ; set member {{ radius_servers[0].name }} {{ radius_servers[1].name }} ; next ; end ; config system admin ; edit Admin-RW-Malwee ; set remote-auth enable ; set accprofile super_admin ; set wildcard enable ; set remote-group Admin-RW-Malwee ; next ; edit Admin-R-Malwee ; set remote-auth enable ; set accprofile read_only ; set wildcard enable ; set remote-group Admin-R-Malwee ; next ; end"
+        timeout: 30
+        echo: true
+      delegate_to: localhost
+
+    - name: 3. Coletar e Auditar Configuração RADIUS Aplicada
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ssh_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ssh_pass }}"
+          "#": "show user radius"
+        timeout: 30
+        echo: true
+      delegate_to: localhost
+      register: audit_radius
+
+    - name: 4. Exibir resultado da auditoria RADIUS
+      ansible.builtin.debug:
+        msg: "{{ audit_radius.stdout_lines }}"
+
+    - name: 5. Validar presença dos servidores RADIUS na configuração
+      ansible.builtin.assert:
+        that:
+          - "'RADIUS_NPS_01' in audit_radius.stdout"
+          - "'RADIUS_NPS_02' in audit_radius.stdout"
+        fail_msg: "FALHA: Os servidores RADIUS não foram encontrados na configuração do FortiSwitch."
+        success_msg: "SUCESSO: Configuração de RADIUS e AAA validada no FortiSwitch."
