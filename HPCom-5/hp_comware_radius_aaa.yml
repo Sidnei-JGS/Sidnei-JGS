@@ -9,88 +9,92 @@
     radius_server_2: "10.4.0.11"
     domain_name: "malwee.com.br"
     ssh_port: "{{ ansible_port | default(22) }}"
-    # Captura o segredo das credenciais do AWX
     radius_key: "{{ minha_senha_radius | default(secret_key | default(radius_secret | default(secret | default(password | default(lookup('ansible.builtin.env', 'RADIUS_SECRET')))))) }}"
 
   tasks:
-    - name: 1. Executar alteracoes via Paramiko em Python Inline
-      ansible.builtin.shell: |
-        python3 -c '
-        import os
-        import sys
-        import time
-        import paramiko
+    - name: 1. Criar script temporario de conexao Python
+      ansible.builtin.copy:
+        dest: "/tmp/executa_comware.py"
+        mode: "0755"
+        content: |
+          import os
+          import sys
+          import time
+          import paramiko
 
-        # Configura o suporte a algoritmos antigos do Comware 5
-        paramiko.Transport._preferred_kex = (
-            "diffie-hellman-group1-sha1",
-            "diffie-hellman-group14-sha1",
-            "diffie-hellman-group-exchange-sha1"
-        )
-        paramiko.Transport._preferred_ciphers = (
-            "aes128-cbc", "3des-cbc", "aes192-cbc", "aes256-cbc"
-        )
-        paramiko.Transport._preferred_keys = ("ssh-rsa", "ssh-dss")
+          # Força suporte a KEX e Cifras legadas do Comware v5
+          paramiko.Transport._preferred_kex = (
+              'diffie-hellman-group1-sha1',
+              'diffie-hellman-group14-sha1',
+              'diffie-hellman-group-exchange-sha1'
+          )
+          paramiko.Transport._preferred_ciphers = (
+              'aes128-cbc', '3des-cbc', 'aes192-cbc', 'aes256-cbc'
+          )
+          paramiko.Transport._preferred_keys = ('ssh-rsa', 'ssh-dss')
 
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        host = os.environ.get("TARGET_HOST")
-        user = os.environ.get("TARGET_USER")
-        password = os.environ.get("TARGET_PASS")
-        port = int(os.environ.get("TARGET_PORT", 22))
+          host = os.environ.get("TARGET_HOST")
+          user = os.environ.get("TARGET_USER")
+          password = os.environ.get("TARGET_PASS")
+          port = int(os.environ.get("TARGET_PORT", 22))
 
-        try:
-            client.connect(
-                host, 
-                port=port, 
-                username=user, 
-                password=password, 
-                look_for_keys=False, 
-                allow_agent=False, 
-                timeout=15
-            )
-            channel = client.invoke_shell()
-            time.sleep(1)
+          try:
+              client.connect(
+                  host, 
+                  port=port, 
+                  username=user, 
+                  password=password, 
+                  look_for_keys=False, 
+                  allow_agent=False, 
+                  timeout=15
+              )
+              channel = client.invoke_shell()
+              time.sleep(1)
 
-            commands = [
-                "system-view",
-                "radius scheme radius_scheme_malwee",
-                "primary authentication " + os.environ.get("RADIUS_1"),
-                "secondary authentication " + os.environ.get("RADIUS_2"),
-                "key authentication simple " + os.environ.get("RADIUS_KEY"),
-                "user-name-format without-domain",
-                "quit",
-                "domain " + os.environ.get("DOMAIN_NAME"),
-                "authentication default radius-scheme radius_scheme_malwee local",
-                "authorization default radius-scheme radius_scheme_malwee local",
-                "accounting default radius-scheme radius_scheme_malwee local",
-                "access-limit disable",
-                "state active",
-                "idle-cut disable",
-                "self-service-url disable",
-                "quit",
-                "domain default enable " + os.environ.get("DOMAIN_NAME"),
-                "save force",
-                "return"
-            ]
+              commands = [
+                  "system-view",
+                  "radius scheme radius_scheme_malwee",
+                  "primary authentication " + os.environ.get("RADIUS_1"),
+                  "secondary authentication " + os.environ.get("RADIUS_2"),
+                  "key authentication simple " + os.environ.get("RADIUS_KEY"),
+                  "user-name-format without-domain",
+                  "quit",
+                  "domain " + os.environ.get("DOMAIN_NAME"),
+                  "authentication default radius-scheme radius_scheme_malwee local",
+                  "authorization default radius-scheme radius_scheme_malwee local",
+                  "accounting default radius-scheme radius_scheme_malwee local",
+                  "access-limit disable",
+                  "state active",
+                  "idle-cut disable",
+                  "self-service-url disable",
+                  "quit",
+                  "domain default enable " + os.environ.get("DOMAIN_NAME"),
+                  "save force",
+                  "return"
+              ]
 
-            for cmd in commands:
-                channel.send(cmd + "\n")
-                time.sleep(0.5)
+              for cmd in commands:
+                  channel.send(cmd + "\n")
+                  time.sleep(0.5)
 
-            time.sleep(3)
-            
-            output = ""
-            if channel.recv_ready():
-                output = channel.recv(99999).decode("utf-8", errors="ignore")
+              time.sleep(3)
+              
+              output = ""
+              if channel.recv_ready():
+                  output = channel.recv(99999).decode("utf-8", errors="ignore")
 
-            client.close()
-            print(output)
-        except Exception as e:
-            print(f"ERRO DE CONEXAO COM {host}: {str(e)}", file=sys.stderr)
-            sys.exit(1)
-        '
+              client.close()
+              print(output)
+          except Exception as e:
+              print(f"ERRO DE CONEXAO COM {host}: {str(e)}", file=sys.stderr)
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: 2. Executar script de aplicacao no Comware 5
+      ansible.builtin.command: python3 /tmp/executa_comware.py
       environment:
         TARGET_HOST: "{{ inventory_hostname }}"
         TARGET_USER: "{{ ansible_user }}"
@@ -103,10 +107,16 @@
       delegate_to: localhost
       register: resultado_comware
 
-    - name: 2. Exibir log de execucao do Switch Comware 5
+    - name: 3. Limpar script temporario
+      ansible.builtin.file:
+        path: "/tmp/executa_comware.py"
+        state: absent
+      delegate_to: localhost
+
+    - name: 4. Exibir log de execucao do Switch
       ansible.builtin.debug:
         var: resultado_comware.stdout_lines
 
-    - name: 3. Confirmar aplicacao no switch
+    - name: 5. Confirmar aplicacao no switch
       ansible.builtin.debug:
         msg: "✅ Autenticação RADIUS e Domínio AAA configurados e salvos com sucesso no switch {{ inventory_hostname }}!"
