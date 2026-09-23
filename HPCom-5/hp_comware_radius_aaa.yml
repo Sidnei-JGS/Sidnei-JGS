@@ -9,42 +9,35 @@
     radius_server_2: "10.4.0.11"
     domain_name: "malwee.com.br"
     ssh_port: "{{ ansible_port | default(22) }}"
-    # Captura a chave do RADIUS automaticamente das credenciais do AWX
     radius_key: "{{ minha_senha_radius | default(secret_key | default(radius_secret | default(secret | default(password | default(lookup('ansible.builtin.env', 'RADIUS_SECRET')))))) }}"
 
   tasks:
-    - name: 1. Aplicar configuracoes de RADIUS e AAA no Comware 5 via SSH (Linha a Linha)
-      ansible.builtin.expect:
-        command: "ssh -o StrictHostKeyChecking=no -o KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group14-sha1 -o Ciphers=+aes128-cbc,3des-cbc -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
-        responses:
-          "(?i)password:": "{{ ansible_password }}\n"
-          # Responde ao Prompt do Switch (<Switch> ou [Switch]) enviando os comandos em bloco com quebras explícitas
-          "[<\\[][a-zA-Z0-9_.-]+[\\]>]":
-            - "system-view\n"
-            - "radius scheme radius_scheme_malwee\n"
-            - "primary authentication {{ radius_server_1 }}\n"
-            - "secondary authentication {{ radius_server_2 }}\n"
-            - "key authentication simple {{ radius_key }}\n"
-            - "user-name-format without-domain\n"
-            - "quit\n"
-            - "domain {{ domain_name }}\n"
-            - "authentication default radius-scheme radius_scheme_malwee local\n"
-            - "authorization default radius-scheme radius_scheme_malwee local\n"
-            - "accounting default radius-scheme radius_scheme_malwee local\n"
-            - "access-limit disable\n"
-            - "state active\n"
-            - "idle-cut disable\n"
-            - "self-service-url disable\n"
-            - "quit\n"
-            - "domain default enable {{ domain_name }}\n"
-            - "save force\n"
-            - "quit\n"
-        timeout: 30
-        echo: false
-      delegate_to: localhost
-      register: comware_output
-      failed_when: comware_output.rc not in [0, 255]
-      no_log: true  # Oculta a digitação das chaves e senhas nos logs do AWX
+    - name: 1. Aplicar comandos sequenciais no HP Comware v5
+      ansible.netcommon.cli_command:
+        command: "{{ item }}"
+      loop:
+        - "system-view"
+        - "radius scheme radius_scheme_malwee"
+        - "primary authentication {{ radius_server_1 }}"
+        - "secondary authentication {{ radius_server_2 }}"
+        - "key authentication simple {{ radius_key }}"
+        - "user-name-format without-domain"
+        - "quit"
+        - "domain {{ domain_name }}"
+        - "authentication default radius-scheme radius_scheme_malwee local"
+        - "authorization default radius-scheme radius_scheme_malwee local"
+        - "accounting default radius-scheme radius_scheme_malwee local"
+        - "access-limit disable"
+        - "state active"
+        - "idle-cut disable"
+        - "self-service-url disable"
+        - "quit"
+        - "domain default enable {{ domain_name }}"
+        - "save force"
+        - "return"
+      vars:
+        ansible_connection: network_cli
+        ansible_network_os: comware
 
     - name: 2. Confirmar aplicacao das configuracoes
       ansible.builtin.debug:
