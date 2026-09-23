@@ -9,13 +9,15 @@
     radius_server_2: "10.4.0.11"
     domain_name: "malwee.com.br"
     ssh_port: "{{ ansible_port | default(22) }}"
-    # Captura o segredo das variáveis do AWX
+    # Captura o segredo das credenciais do AWX
     radius_key: "{{ minha_senha_radius | default(secret_key | default(radius_secret | default(secret | default(password | default(lookup('ansible.builtin.env', 'RADIUS_SECRET')))))) }}"
 
   tasks:
     - name: 1. Executar alteracoes via Paramiko em Python Inline
       ansible.builtin.shell: |
         python3 -c '
+        import os
+        import sys
         import time
         import paramiko
 
@@ -33,10 +35,10 @@
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        host = "{{ inventory_hostname }}"
-        user = "{{ ansible_user }}"
-        password = """{{ ansible_password }}"""
-        port = int("{{ ssh_port }}")
+        host = os.environ.get("TARGET_HOST")
+        user = os.environ.get("TARGET_USER")
+        password = os.environ.get("TARGET_PASS")
+        port = int(os.environ.get("TARGET_PORT", 22))
 
         try:
             client.connect(
@@ -54,12 +56,12 @@
             commands = [
                 "system-view",
                 "radius scheme radius_scheme_malwee",
-                "primary authentication {{ radius_server_1 }}",
-                "secondary authentication {{ radius_server_2 }}",
-                "key authentication simple {{ radius_key }}",
+                "primary authentication " + os.environ.get("RADIUS_1"),
+                "secondary authentication " + os.environ.get("RADIUS_2"),
+                "key authentication simple " + os.environ.get("RADIUS_KEY"),
                 "user-name-format without-domain",
                 "quit",
-                "domain {{ domain_name }}",
+                "domain " + os.environ.get("DOMAIN_NAME"),
                 "authentication default radius-scheme radius_scheme_malwee local",
                 "authorization default radius-scheme radius_scheme_malwee local",
                 "accounting default radius-scheme radius_scheme_malwee local",
@@ -68,7 +70,7 @@
                 "idle-cut disable",
                 "self-service-url disable",
                 "quit",
-                "domain default enable {{ domain_name }}",
+                "domain default enable " + os.environ.get("DOMAIN_NAME"),
                 "save force",
                 "return"
             ]
@@ -86,9 +88,18 @@
             client.close()
             print(output)
         except Exception as e:
-            print(f"ERRO: {str(e)}")
-            exit(1)
+            print(f"ERRO DE CONEXAO COM {host}: {str(e)}", file=sys.stderr)
+            sys.exit(1)
         '
+      environment:
+        TARGET_HOST: "{{ inventory_hostname }}"
+        TARGET_USER: "{{ ansible_user }}"
+        TARGET_PASS: "{{ ansible_password }}"
+        TARGET_PORT: "{{ ssh_port }}"
+        RADIUS_1: "{{ radius_server_1 }}"
+        RADIUS_2: "{{ radius_server_2 }}"
+        RADIUS_KEY: "{{ radius_key }}"
+        DOMAIN_NAME: "{{ domain_name }}"
       delegate_to: localhost
       register: resultado_comware
 
