@@ -13,50 +13,39 @@
     radius_key: "{{ minha_senha_radius | default(secret_key | default(radius_secret | default(secret | default(password | default(lookup('ansible.builtin.env', 'RADIUS_SECRET')))))) }}"
 
   tasks:
-    - name: 1. Montar bloco de comandos da CLI do Comware 5
-      ansible.builtin.set_fact:
-        comware_config_commands: |
-          system-view
-          #
-          # Configuração do Esquema RADIUS
-          radius scheme radius_scheme_malwee
-           primary authentication {{ radius_server_1 }}
-           secondary authentication {{ radius_server_2 }}
-           key authentication cipher {{ radius_key }}
-           user-name-format without-domain
-          quit
-          #
-          # Configuração do Domínio de Autenticação AAA
-          domain {{ domain_name }}
-           authentication default radius-scheme radius_scheme_malwee local
-           authorization default radius-scheme radius_scheme_malwee local
-           accounting default radius-scheme radius_scheme_malwee local
-           access-limit disable
-           state active
-           idle-cut disable
-           self-service-url disable
-          quit
-          #
-          # Configurar o Domínio Padrão do Sistema
-          domain default enable {{ domain_name }}
-          #
-          # Salvar as alterações na memória FLASH
-          save force
-          return
-
-    - name: 2. Aplicar configurações no HP Comware v5 via SSH (Expect)
+    - name: 1. Aplicar configuracoes de RADIUS e AAA no Comware 5 via SSH (Linha a Linha)
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -o KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group14-sha1 -o Ciphers=+aes128-cbc,3des-cbc -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          "<[a-zA-Z0-9_.-]+>": "{{ comware_config_commands }}"
-        timeout: 60
+          # Responde ao Prompt do Switch (<Switch> ou [Switch]) enviando os comandos em bloco com quebras explícitas
+          "[<\\[][a-zA-Z0-9_.-]+[\\]>]":
+            - "system-view\n"
+            - "radius scheme radius_scheme_malwee\n"
+            - "primary authentication {{ radius_server_1 }}\n"
+            - "secondary authentication {{ radius_server_2 }}\n"
+            - "key authentication simple {{ radius_key }}\n"
+            - "user-name-format without-domain\n"
+            - "quit\n"
+            - "domain {{ domain_name }}\n"
+            - "authentication default radius-scheme radius_scheme_malwee local\n"
+            - "authorization default radius-scheme radius_scheme_malwee local\n"
+            - "accounting default radius-scheme radius_scheme_malwee local\n"
+            - "access-limit disable\n"
+            - "state active\n"
+            - "idle-cut disable\n"
+            - "self-service-url disable\n"
+            - "quit\n"
+            - "domain default enable {{ domain_name }}\n"
+            - "save force\n"
+            - "quit\n"
+        timeout: 30
         echo: false
       delegate_to: localhost
       register: comware_output
       failed_when: comware_output.rc not in [0, 255]
-      no_log: true  # Impede exposição de senhas nos logs do AWX
+      no_log: true  # Oculta a digitação das chaves e senhas nos logs do AWX
 
-    - name: 3. Confirmar aplicação das configurações
+    - name: 2. Confirmar aplicacao das configuracoes
       ansible.builtin.debug:
-        msg: "✅ Autenticação RADIUS/AAA configurada e salva com sucesso no switch {{ inventory_hostname }}!"
+        msg: "✅ Autenticação RADIUS e Domínio AAA configurados e salvos com sucesso no switch {{ inventory_hostname }}!"
