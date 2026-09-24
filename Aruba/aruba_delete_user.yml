@@ -1,0 +1,62 @@
+---
+- name: Deletar Usuário Administrador Local no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+
+  vars:
+    target_user: "{{ username_to_delete | default('') }}"
+    ansible_command_timeout: 60
+    ansible_connect_timeout: 60
+
+  tasks:
+    - name: 0. Validar se o nome do usuario foi fornecido
+      ansible.builtin.fail:
+        msg: "Por favor, defina a variável 'username_to_delete' via Survey no AWX."
+      when: target_user == ''
+
+    - name: 0.1 Validar se o usuário a ser deletado não é o próprio usuário da conexão ativa
+      ansible.builtin.assert:
+        that:
+          - "target_user != (ansible_user | default(ansible_ssh_user))"
+        fail_msg: >
+          ABORTADO POR SEGURANÇA: Você está tentando deletar o usuário '{{ target_user }}',
+          que é a mesma conta utilizada pelo Ansible para se conectar no switch!
+        success_msg: "Validação de segurança aprovada: '{{ target_user }}' não é a conta da sessão ativa."
+
+    - name: 1. Remover usuário com tratamento do prompt de confirmação (y/n)
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - command: "configure terminal"
+          - command: "no user {{ target_user }}"
+            prompt: ".*[C|c]ontinue.*"
+            answer: "y"
+          - command: "exit"
+      register: user_delete_result
+
+    - name: 2. Coletar running-config de usuários para auditoria
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "show running-config | include user"
+      register: audit_user_output
+
+    - name: 3. Exibir resultado da auditoria (mascarando senhas)
+      ansible.builtin.debug:
+        msg: "{{ audit_user_output.stdout_lines | flatten | reject('search', 'password') | list }}"
+
+    - name: 4. Conferir se o usuário foi realmente removido
+      vars:
+        saida_audit: "{{ audit_user_output.stdout | flatten | join('\n') }}"
+      ansible.builtin.assert:
+        that:
+          - "'user ' + target_user + ' ' not in saida_audit"
+        fail_msg: >
+          ALERTA: O usuário '{{ target_user }}' ainda consta no running-config.
+          Abortando persistência!
+        success_msg: "Confirmado: O usuário '{{ target_user }}' foi removido com sucesso."
+
+    - name: 5. Salvar alterações no startup-config
+      arubanetworks.aoscx.aoscx_command:
+        commands:
+          - "copy running-config startup-config"
