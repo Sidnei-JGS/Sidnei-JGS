@@ -22,7 +22,7 @@
           import time
           import paramiko
 
-          # Libera os algoritmos legados para o Transport
+          # Força a liberação global de algoritmos legados do Comware v5
           paramiko.Transport._preferred_kex = (
               'diffie-hellman-group1-sha1',
               'diffie-hellman-group14-sha1',
@@ -44,7 +44,6 @@
           port = int(os.environ.get("TARGET_PORT", 22))
 
           try:
-              # disabled_algorithms vazio forca o Paramiko a ACEITAR cifras antigas sem bloquear no OpenSSL
               client.connect(
                   host, 
                   port=port, 
@@ -93,7 +92,7 @@
               client.close()
               print(output)
           except Exception as e:
-              sys.stderr.write(f"FALHA_CONEXAO: {type(e).__name__} - {str(e)}\n")
+              sys.stderr.write(f"ERRO_DETALHADO: {type(e).__name__} -> {str(e)}\n")
               sys.exit(1)
       delegate_to: localhost
 
@@ -112,21 +111,18 @@
       register: resultado_comware
       ignore_errors: true
 
-    - name: 3. Exibir Diagnostico do Switch (Stdout / Stderr)
-      ansible.builtin.debug:
-        msg:
-          - "--- RESPOSTA DO TERMINAL (STDOUT) ---"
-          - "{{ resultado_comware.stdout_lines }}"
-          - "--- MENSAGEM DE ERRO (STDERR) ---"
-          - "{{ resultado_comware.stderr_lines }}"
-
-    - name: 4. Limpar script temporario
+    - name: 3. Limpar script temporario
       ansible.builtin.file:
         path: "/tmp/executa_comware.py"
         state: absent
       delegate_to: localhost
 
-    - name: 5. Validar sucesso da Task
+    - name: 4. Validar resultado da execucao
       ansible.builtin.fail:
-        msg: "A execução falhou no switch {{ inventory_hostname }}. Verifique o log do STDERR acima."
+        msg:
+          - "❌ FALHA AO APLICAR NO SWITCH {{ inventory_hostname }}"
+          - "--- MENSAGEM DE ERRO (STDERR) ---"
+          - "{{ resultado_comware.stderr_lines }}"
+          - "--- SAIDA DO TERMINAL (STDOUT) ---"
+          - "{{ resultado_comware.stdout_lines }}"
       when: resultado_comware.rc != 0
