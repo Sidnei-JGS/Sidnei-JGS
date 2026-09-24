@@ -1,0 +1,101 @@
+---
+- name: Configurar Autenticacao RADIUS e Perfis Remotos no FortiSwitch
+  hosts: fortinet
+  gather_facts: false
+  serial: 1
+
+  vars:
+    radius_server_1: "10.4.0.10"
+    radius_server_2: "10.4.0.11"
+    ssh_port: "{{ ansible_port | default(22) }}"
+
+  tasks:
+    - name: 1. Montar bloco de comandos da CLI
+      ansible.builtin.set_fact:
+        radius_config_commands: |
+          config user radius
+              edit "NPS-Malwee-01"
+                  set server "{{ radius_server_1 }}"
+                  set secret "{{ radius_key }}"
+                  set auth-type pap
+              next
+              edit "NPS-Malwee-02"
+                  set server "{{ radius_server_2 }}"
+                  set secret "{{ radius_key }}"
+                  set auth-type pap
+              next
+          end
+          config user group
+              edit "Forti-Group-RW"
+                  set member "NPS-Malwee-01" "NPS-Malwee-02"
+                  config match
+                      edit 1
+                          set server-name "NPS-Malwee-01"
+                          set group-name "GA_HOST_RW"
+                      next
+                      edit 2
+                          set server-name "NPS-Malwee-02"
+                          set group-name "GA_HOST_RW"
+                      next
+                  end
+              next
+              edit "Forti-Group-R"
+                  set member "NPS-Malwee-01" "NPS-Malwee-02"
+                  config match
+                      edit 1
+                          set server-name "NPS-Malwee-01"
+                          set group-name "GA_HOST_R"
+                      next
+                      edit 2
+                          set server-name "NPS-Malwee-02"
+                          set group-name "GA_HOST_R"
+                      next
+                  end
+              next
+          end
+          config system accprofile
+              edit "Prof_RO"
+                  set admingrp read
+                  set exec-alias-grp read
+                  set loggrp read
+                  set mntgrp read
+                  set netgrp read
+                  set pktmongrp read
+                  set routegrp read
+                  set swcoregrp read
+                  set swmonguardgrp read
+                  set sysgrp read
+                  set utilgrp read
+              next
+          end
+          config system admin
+              edit "Admin-RW-Malwee"
+                  set remote-auth enable
+                  set accprofile "super_admin"
+                  set vdom "root"
+                  set wildcard enable
+                  set remote-group "Forti-Group-RW"
+              next
+              edit "Admin-RO-Malwee"
+                  set remote-auth enable
+                  set accprofile "Prof_RO"
+                  set wildcard enable
+                  set remote-group "Forti-Group-R"
+              next
+          end
+          exit
+
+    - name: 2. Aplicar configuracoes de RADIUS via SSH
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "[a-zA-Z0-9_.-]+ #": "{{ radius_config_commands }}"
+        timeout: 60
+      delegate_to: localhost
+      register: radius_output
+      failed_when: radius_output.rc not in [0, 255]
+
+    - name: 3. Confirmar aplicacao da configuracao RADIUS
+      ansible.builtin.debug:
+        msg: "✅ Servidores RADIUS, Perfis de Acesso e Administradores Remotos configurados com sucesso!"
