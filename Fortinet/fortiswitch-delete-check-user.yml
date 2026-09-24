@@ -1,67 +1,66 @@
+---
 - name: Deletar usuário no FortiSwitch com verificação
-  hosts: switches
-  gather_facts: no
+  hosts: fortinet
+  gather_facts: false
 
-  vars_files:
-    - secrets.yml
+  vars:
+    target_username: "{{ username_to_delete | default('') }}"
 
   tasks:
-    - name: Definir comando para listar usuários
-      set_fact:
+    - name: 0. Validar se o nome do usuario foi fornecido
+      ansible.builtin.fail:
+        msg: "Por favor, defina a variável 'username_to_delete' via Survey no AWX."
+      when: target_username == ''
+
+    - name: 1. Definir comando para listar usuarios
+      ansible.builtin.set_fact:
         check_user_commands: |
           config system admin
           show
           end
           exit
 
-    - name: Verificar se o usuário existe
+    - name: 2. Verificar se o usuario existe
       ansible.builtin.expect:
-        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ansible_port | default(22) }} {{ ansible_user | default('admin') }}@{{ inventory_hostname }}"
         responses:
-          "password:": "{{ ssh_password }}"
-          ".*#": "{{ check_user_commands }}"
+          "(?i)password:": "{{ ansible_password }}\n"
+          "[a-zA-Z0-9_.-]+ #": "{{ check_user_commands }}"
         timeout: 60
       delegate_to: localhost
       register: user_check_output
+      failed_when: user_check_output.rc not in [0, 255]
 
-#    - name: Exibir resultado da checagem
-#      debug:
-#        var: user_check_output.stdout_lines
+    - name: 3. Definir variavel de existencia
+      ansible.builtin.set_fact:
+        user_exists: "{{ target_username in user_check_output.stdout }}"
 
-    - name: Definir variável para saber se o usuário existe
-      set_fact:
-        user_exists: "{{ username_to_delete in user_check_output.stdout }}"
+    - name: 4. Exibir status do usuario
+      ansible.builtin.debug:
+        msg: "Usuario '{{ target_username }}' {{ 'encontrado' if user_exists else 'nao encontrado' }} no switch."
 
-    - name: Exibir status da existência do usuário
-      debug:
-        msg: "Usuário '{{ username_to_delete }}' {{ 'encontrado' if user_exists else 'não encontrado' }} no switch."
-
-    - name: Preparar comandos para deletar usuário
-      set_fact:
+    - name: 5. Preparar comandos de remocao
+      ansible.builtin.set_fact:
         fortiswitch_delete_commands: |
           config system admin
-          delete {{ username_to_delete }}
+          delete {{ target_username }}
           end
           exit
       when: user_exists
 
-    - name: Deletar usuário se ele existir
+    - name: 6. Deletar usuario se ele existir
       ansible.builtin.expect:
-        command: ssh -o StrictHostKeyChecking=no admin@{{ ansible_host }}
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ansible_port | default(22) }} {{ ansible_user | default('admin') }}@{{ inventory_hostname }}"
         responses:
-          "password:": "{{ ssh_password }}"
-          ".*#": "{{ fortiswitch_delete_commands }}"
+          "(?i)password:": "{{ ansible_password }}\n"
+          "[a-zA-Z0-9_.-]+ #": "{{ fortiswitch_delete_commands }}"
         timeout: 60
       when: user_exists
       delegate_to: localhost
       register: delete_output
+      failed_when: delete_output.rc not in [0, 255]
 
- #   - name: Mostrar saída do delete
- #     debug:
- #       var: delete_output.stdout_lines
-      when: user_exists
-
-    - name: Avisar se usuário não foi encontrado
-      debug:
-        msg: "Usuário '{{ username_to_delete }}' não foi encontrado no switch. Nada a deletar."
+    - name: 7. Avisar se usuario nao foi encontrado
+      ansible.builtin.debug:
+        msg: "Usuario '{{ target_username }}' nao foi encontrado. Nada a deletar."
       when: not user_exists
