@@ -12,7 +12,7 @@
     radius_key: "{{ minha_senha_radius | default(secret_key | default(radius_secret | default(secret | default(password | default(lookup('ansible.builtin.env', 'RADIUS_SECRET')))))) }}"
 
   tasks:
-    - name: 1. Criar script temporario de conexao Python
+    - name: 1. Criar script de aplicacao Paramiko
       ansible.builtin.copy:
         dest: "/tmp/executa_comware.py"
         mode: "0755"
@@ -22,14 +22,16 @@
           import time
           import paramiko
 
-          # Força suporte a KEX e Cifras legadas do Comware v5
+          # Força a liberação de TODOS os algoritmos KEX, Cifras e Chaves antigas do Comware v5
           paramiko.Transport._preferred_kex = (
               'diffie-hellman-group1-sha1',
               'diffie-hellman-group14-sha1',
-              'diffie-hellman-group-exchange-sha1'
+              'diffie-hellman-group-exchange-sha1',
+              'diffie-hellman-group-exchange-sha256'
           )
           paramiko.Transport._preferred_ciphers = (
-              'aes128-cbc', '3des-cbc', 'aes192-cbc', 'aes256-cbc'
+              'aes128-cbc', '3des-cbc', 'aes192-cbc', 'aes256-cbc',
+              'aes128-ctr', 'aes192-ctr', 'aes256-ctr'
           )
           paramiko.Transport._preferred_keys = ('ssh-rsa', 'ssh-dss')
 
@@ -89,11 +91,12 @@
               client.close()
               print(output)
           except Exception as e:
-              print(f"ERRO DE CONEXAO COM {host}: {str(e)}", file=sys.stderr)
+              # Imprime o erro detalhado no STDERR
+              sys.stderr.write(f"FALHA_CONEXAO: {type(e).__name__} - {str(e)}\n")
               sys.exit(1)
       delegate_to: localhost
 
-    - name: 2. Executar script de aplicacao no Comware 5
+    - name: 2. Executar conexao SSH no Comware 5
       ansible.builtin.command: python3 /tmp/executa_comware.py
       environment:
         TARGET_HOST: "{{ inventory_hostname }}"
@@ -106,17 +109,23 @@
         DOMAIN_NAME: "{{ domain_name }}"
       delegate_to: localhost
       register: resultado_comware
+      ignore_errors: true
 
-    - name: 3. Limpar script temporario
+    - name: 3. Exibir Diagnostico do Switch (Stdout / Stderr)
+      ansible.builtin.debug:
+        msg:
+          - "--- RESPOSTA DO TERMINAL (STDOUT) ---"
+          - "{{ resultado_comware.stdout_lines }}"
+          - "--- MENSAGEM DE ERRO (STDERR) ---"
+          - "{{ resultado_comware.stderr_lines }}"
+
+    - name: 4. Limpar script temporario
       ansible.builtin.file:
         path: "/tmp/executa_comware.py"
         state: absent
       delegate_to: localhost
 
-    - name: 4. Exibir log de execucao do Switch
-      ansible.builtin.debug:
-        var: resultado_comware.stdout_lines
-
-    - name: 5. Confirmar aplicacao no switch
-      ansible.builtin.debug:
-        msg: "✅ Autenticação RADIUS e Domínio AAA configurados e salvos com sucesso no switch {{ inventory_hostname }}!"
+    - name: 5. Validar sucesso da Task
+      ansible.builtin.fail:
+        msg: "A execução falhou no switch {{ inventory_hostname }}. Verifique o log do STDERR acima."
+      when: resultado_comware.rc != 0
