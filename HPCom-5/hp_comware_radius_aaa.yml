@@ -12,7 +12,7 @@
     radius_key: "{{ minha_senha_radius | default(secret_key | default(radius_secret | default(secret | default(password | default(lookup('ansible.builtin.env', 'RADIUS_SECRET')))))) }}"
 
   tasks:
-    - name: 1. Criar script de aplicacao Paramiko
+    - name: 1. Criar script de aplicacao Paramiko Seguro
       ansible.builtin.copy:
         dest: "/tmp/executa_comware.py"
         mode: "0755"
@@ -22,7 +22,6 @@
           import time
           import paramiko
 
-          # Força a liberação global de algoritmos legados do Comware v5
           paramiko.Transport._preferred_kex = (
               'diffie-hellman-group1-sha1',
               'diffie-hellman-group14-sha1',
@@ -57,14 +56,19 @@
               channel = client.invoke_shell()
               time.sleep(1)
 
+              # Sequência com isolamento de contexto e confirmação de views
               commands = [
                   "system-view",
+                  
+                  # 1. Configuração do Radius Scheme
                   "radius scheme radius_scheme_malwee",
                   "primary authentication " + os.environ.get("RADIUS_1"),
                   "secondary authentication " + os.environ.get("RADIUS_2"),
                   "key authentication simple " + os.environ.get("RADIUS_KEY"),
                   "user-name-format without-domain",
                   "quit",
+                  
+                  # 2. Configuração da ISP Domain AAA
                   "domain " + os.environ.get("DOMAIN_NAME"),
                   "authentication default radius-scheme radius_scheme_malwee local",
                   "authorization default radius-scheme radius_scheme_malwee local",
@@ -74,14 +78,18 @@
                   "idle-cut disable",
                   "self-service-url disable",
                   "quit",
+                  
+                  # 3. Definição do Domínio Padrão
                   "domain default enable " + os.environ.get("DOMAIN_NAME"),
+                  
+                  # 4. Gravação e Retorno
                   "save force",
                   "return"
               ]
 
               for cmd in commands:
                   channel.send(cmd + "\n")
-                  time.sleep(0.5)
+                  time.sleep(0.8)
 
               time.sleep(3)
               
