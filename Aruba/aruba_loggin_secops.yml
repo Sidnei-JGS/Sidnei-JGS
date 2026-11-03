@@ -31,11 +31,11 @@
       ansible.builtin.set_fact:
         has_log_configured: "{{ run_config_output.stdout is search(target_log_server) }}"
 
-    - name: 3. DEBUG - Inspecionar saida capturada
-      ansible.builtin.debug:
-        msg:
-          - "Captura bruta: {{ run_config_output.stdout }}"
-          - "Status detectado: {{ 'PRESENTE (OK)' if has_log_configured else 'AUSENTE (NAO CONFIGURADO)' }}"
+    #- name: 3. DEBUG - Inspecionar saida capturada
+    #  ansible.builtin.debug:
+    #    msg:
+    #      - "Captura bruta: {{ run_config_output.stdout }}"
+    #      - "Status detectado: {{ 'PRESENTE (OK)' if has_log_configured else 'AUSENTE (NAO CONFIGURADO)' }}"
 
     - name: 4. Sinalizar se nao estiver configurado
       ansible.builtin.assert:
