@@ -1,5 +1,5 @@
 ---
-- name: Verificar Servidor de Log no Aruba AOS-CX
+- name: 1. Auditar Switches Aruba AOS-CX
   hosts: aruba_cx
   gather_facts: false
   serial: 1
@@ -9,7 +9,7 @@
     target_log_server: "log.malwee.com.br"
 
   tasks:
-    - name: 1. Consultar configuracao no Aruba CX
+    - name: Consultar configuracao no Aruba CX
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
@@ -18,29 +18,35 @@
             - "no page"
             - "show running-config | include {{ target_log_server }}"
             - "exit"
-        timeout: 30
+        timeout: 15
         echo: true
       delegate_to: localhost
       register: run_config_output
-      # Falha caso a porta esteja fechada, conexao recusada ou timeout
-      failed_when: 
-        - run_config_output.rc != 0
-        - "'Connection refused' in run_config_output.stdout or 'timed out' in run_config_output.stdout"
+      failed_when: run_config_output.rc not in [0, 255]
 
-    - name: 2. Validar se o log server esta presente
+    - name: Salvar status de presenca da configuracao
       ansible.builtin.set_fact:
         has_log_configured: "{{ run_config_output.stdout is search(target_log_server) }}"
 
-    #- name: 3. DEBUG - Inspecionar saida capturada
-    #  ansible.builtin.debug:
-    #    msg:
-    #      - "Captura bruta: {{ run_config_output.stdout }}"
-    #      - "Status detectado: {{ 'PRESENTE (OK)' if has_log_configured else 'AUSENTE (NAO CONFIGURADO)' }}"
+- name: 2. Gerar Relatorio Consolidado
+  hosts: localhost
+  gather_facts: false
 
-    - name: 4. Sinalizar se nao estiver configurado
-      ansible.builtin.assert:
-        that:
-          - has_log_configured
-        fail_msg: "O switch {{ inventory_hostname }} NAO possui '{{ target_log_server }}' configurado."
-        success_msg: "O switch {{ inventory_hostname }} possui '{{ target_log_server }}' configurado corretamente."
-      ignore_errors: true
+  vars:
+    target_log_server: "log.malwee.com.br"
+
+  tasks:
+    - name: Exibir resumo geral de conformidade
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "RELATORIO GERAL - LOGGING ({{ target_log_server }})"
+          - "======================================================="
+          - "TOTAL DE SWITCHES AUDITADOS: {{ groups['aruba_cx'] | length }}"
+          - "-------------------------------------------------------"
+          - "SWITCHES CONFORMES (OK):"
+          - "{{ groups['aruba_cx'] | select('extract', hostvars, 'has_log_configured') | list }}"
+          - "-------------------------------------------------------"
+          - "SWITCHES NAO CONFORMES (SEM O LOGGING):"
+          - "{{ groups['aruba_cx'] | reject('extract', hostvars, 'has_log_configured') | list }}"
+          - "======================================================="
