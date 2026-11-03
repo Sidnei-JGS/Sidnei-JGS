@@ -14,7 +14,6 @@
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          # Responde a cada prompt sequencialmente para garantir a captura
           "(?i)[a-z0-9_.-]+#":
             - "no page"
             - "show running-config | include {{ target_log_server }}"
@@ -23,9 +22,12 @@
         echo: true
       delegate_to: localhost
       register: run_config_output
-      failed_when: run_config_output.rc not in [0, 255]
+      # Falha caso a porta esteja fechada, conexao recusada ou timeout
+      failed_when: 
+        - run_config_output.rc != 0
+        - "'Connection refused' in run_config_output.stdout or 'timed out' in run_config_output.stdout"
 
-    - name: 2. Validar se o log server esta presente (Regex insensivel a quebras)
+    - name: 2. Validar se o log server esta presente
       ansible.builtin.set_fact:
         has_log_configured: "{{ run_config_output.stdout is search(target_log_server) }}"
 
@@ -35,7 +37,7 @@
           - "Captura bruta: {{ run_config_output.stdout }}"
           - "Status detectado: {{ 'PRESENTE (OK)' if has_log_configured else 'AUSENTE (NAO CONFIGURADO)' }}"
 
-    - name: 4. Sinalizar falha no AWX caso esteja ausente
+    - name: 4. Sinalizar se nao estiver configurado
       ansible.builtin.assert:
         that:
           - has_log_configured
