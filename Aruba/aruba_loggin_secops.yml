@@ -6,38 +6,39 @@
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
-    target_logging_host: "log.malwee.com.br"
+    # Use underline no nome da variável, o valor pode conter pontos normalmente
+    target_log_server: "log.malwee.com.br"
 
   tasks:
-    - name: 1. Consultar configuracao de logging no Aruba CX
+    - name: 1. Consultar configuracao no Aruba CX
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
           "#":
             - "no page"
-            - "show running-config | include {{ target_logging_host }}"
+            - "show running-config | include {{ target_log_server }}"
             - "exit"
         timeout: 30
       delegate_to: localhost
       register: run_config_output
       failed_when: run_config_output.rc not in [0, 255]
 
-    - name: 2. Validar se o host de log esta presente
+    - name: 2. Validar se o log server esta presente
       ansible.builtin.set_fact:
-        has_logging_configured: "{{ target_logging_host in run_config_output.stdout }}"
+        has_log_configured: "{{ target_log_server in run_config_output.stdout }}"
 
     - name: 3. Exibir status da verificacao
       ansible.builtin.debug:
         msg: >-
           Switch: {{ inventory_hostname }} |
-          Status: {{ 'PRESENTE (OK)' if has_logging_configured else 'AUSENTE (NAO CONFIGURADO)' }} |
-          Host buscado: '{{ target_logging_host }}'
+          Status: {{ 'PRESENTE (OK)' if has_log_configured else 'AUSENTE (NAO CONFIGURADO)' }} |
+          Parametro buscado: '{{ target_log_server }}'
 
     - name: 4. (Opcional) Sinalizar falha no AWX caso esteja ausente
       ansible.builtin.assert:
         that:
-          - has_logging_configured
-        fail_msg: "O switch {{ inventory_hostname }} NAO possui o host '{{ target_logging_host }}' configurado."
-        success_msg: "O switch {{ inventory_hostname }} possui o host '{{ target_logging_host }}' configurado corretamente."
+          - has_log_configured
+        fail_msg: "O switch {{ inventory_hostname }} NAO possui '{{ target_log_server }}' configurado."
+        success_msg: "O switch {{ inventory_hostname }} possui '{{ target_log_server }}' configurado corretamente."
       ignore_errors: true
