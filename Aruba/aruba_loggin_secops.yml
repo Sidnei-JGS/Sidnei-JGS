@@ -1,0 +1,43 @@
+---
+- name: Verificar Servidor de Logging no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    target_logging_line: "logging log.malwee.com.br"
+
+  tasks:
+    - name: 1. Consultar configuracao de logging no Aruba CX
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "#":
+            - "no page"
+            - "show running-config | include logging"
+            - "exit"
+        timeout: 30
+      delegate_to: localhost
+      register: run_config_output
+      failed_when: run_config_output.rc not in [0, 255]
+
+    - name: 2. Validar se a linha de logging esta presente
+      ansible.builtin.set_fact:
+        has_logging_configured: "{{ target_logging_line in run_config_output.stdout }}"
+
+    - name: 3. Exibir status da verificacao
+      ansible.builtin.debug:
+        msg: >-
+          Switch: {{ inventory_hostname }} |
+          Status: {{ 'PRESENTE (OK)' if has_logging_configured else 'AUSENTE (NAO CONFIGURADO)' }} |
+          Linha buscada: '{{ target_logging_line }}'
+
+    - name: 4. (Opcional) Sinalizar falha no AWX caso esteja ausente
+      ansible.builtin.assert:
+        that:
+          - has_logging_configured
+        fail_msg: "O switch {{ inventory_hostname }} NAO possui a linha '{{ target_logging_line }}'."
+        success_msg: "O switch {{ inventory_hostname }} possui o logging configurado corretamente."
+      ignore_errors: true
