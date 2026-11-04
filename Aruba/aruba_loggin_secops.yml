@@ -1,22 +1,25 @@
 ---
-- name: 1. Auditar Switches Aruba AOS-CX
+- name: 1. Auditar Servidor de Log no Aruba AOS-CX (Modo Check / Auditoria)
   hosts: aruba_cx
   gather_facts: false
   serial: 1
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
-    target_log_server: "log.malwee.com.br"
+    # Regex estrita: exige exatamente 'log.' com ou sem 'filter warning'
+    correct_server_regex: '(?m)^\s*logging\s+log\.malwee\.com\.br\s+filter\s+warning\s*$'
+    # Regex para identificar o host antigo com plural 'logs.'
+    wrong_server_regex: '(?m)^\s*logging\s+logs\.malwee\.com\.br.*$'
 
   tasks:
-    - name: Consultar configuracao no Aruba CX
+    - name: 1. Consultar configuracao de logging existente
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
           "(?i)[a-z0-9_.-]+#":
             - "no page"
-            - "show running-config | include {{ target_log_server }}"
+            - "show running-config | include logging"
             - "exit"
         timeout: 60
         echo: true
@@ -24,48 +27,64 @@
       register: run_config_output
       failed_when: false
 
-    - name: Salvar status da auditoria
+    - name: 2. Avaliar presenca das linhas
       ansible.builtin.set_fact:
-        has_log_configured: "{{ (run_config_output.stdout is defined) and (target_log_server in run_config_output.stdout) }}"
         switch_unreachable: "{{ run_config_output.rc is not defined or run_config_output.rc not in [0, 255] or 'command exceeded timeout' in (run_config_output.msg | default('')) }}"
+        has_correct_logging: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(correct_server_regex)) }}"
+        has_wrong_logging: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(wrong_server_regex)) }}"
 
-- name: 2. Gerar Relatorio Consolidado
+    - name: 3. Status individual em tempo real
+      ansible.builtin.debug:
+        msg: >-
+          Switch {{ inventory_hostname }}: 
+          {{ 'INACESSIVEL' if switch_unreachable else 
+             ('100% OK' if (has_correct_logging and not has_wrong_logging) else 
+             'PENDENCIA DETECTADA [Correto: ' ~ ('OK' if has_correct_logging else 'FALTA') ~ ' | Legado logs: ' ~ ('PRESENTE' if has_wrong_logging else 'AUSENTE') ~ ']') }}
+
+- name: 2. Relatorio Consolidado de Auditoria (Dry-Run)
   hosts: localhost
   gather_facts: false
 
-  vars:
-    target_log_server: "log.malwee.com.br"
-
   tasks:
-    - name: Exibir resumo geral de conformidade
+    - name: Exibir consolidado da auditoria
       ansible.builtin.debug:
         msg:
           - "======================================================="
-          - "RELATORIO GERAL - LOGGING ({{ target_log_server }})"
+          - "RELATORIO GERAL - AUDITORIA DE LOGGING (SEM ALTERACOES)"
           - "======================================================="
           - "TOTAL DE SWITCHES AUDITADOS: {{ groups['aruba_cx'] | length }}"
           - "-------------------------------------------------------"
-          - "SWITCHES CONFORMES (OK):"
+          - "1. TOTALMENTE CONFORMES (log com filter warning e sem logs legado):"
           - >-
             {% set conformes = [] %}
             {% for host in groups['aruba_cx'] %}
-              {% if hostvars[host].has_log_configured | default(false) %}
+              {% if (hostvars[host].has_correct_logging | default(false)) and not (hostvars[host].has_wrong_logging | default(false)) and not (hostvars[host].switch_unreachable | default(false)) %}
                 {% set _ = conformes.append(host) %}
               {% endif %}
             {% endfor %}
             {{ conformes }}
           - "-------------------------------------------------------"
-          - "SWITCHES NAO CONFORMES (SEM O LOGGING):"
+          - "2. CONTEM ENTRADA INCORRETA (logs.malwee.com.br precisa ser removido):"
           - >-
-            {% set nao_conformes = [] %}
+            {% set com_legado = [] %}
             {% for host in groups['aruba_cx'] %}
-              {% if not (hostvars[host].has_log_configured | default(false)) and not (hostvars[host].switch_unreachable | default(false)) %}
-                {% set _ = nao_conformes.append(host) %}
+              {% if (hostvars[host].has_wrong_logging | default(false)) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = com_legado.append(host) %}
               {% endif %}
             {% endfor %}
-            {{ nao_conformes }}
+            {{ com_legado }}
           - "-------------------------------------------------------"
-          - "SWITCHES COM FALHA DE CONEXAO / TIMEOUT:"
+          - "3. FALTA O SERVIDOR CORRETO (precisa adicionar 'log filter warning'):"
+          - >-
+            {% set sem_correto = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if not (hostvars[host].has_correct_logging | default(false)) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = sem_correto.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ sem_correto }}
+          - "-------------------------------------------------------"
+          - "4. FALHAS DE CONEXAO / TIMEOUT:"
           - >-
             {% set falhas = [] %}
             {% for host in groups['aruba_cx'] %}
