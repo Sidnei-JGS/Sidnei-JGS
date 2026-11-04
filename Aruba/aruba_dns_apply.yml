@@ -37,23 +37,19 @@
     - name: 3. Montar lista de comandos faltantes
       ansible.builtin.set_fact:
         commands_to_apply: >-
-          {% set cmds = [] %}
-          {% if not has_domain %}
-            {% set _ = cmds.append('domain-name ' ~ target_domain) %}
-          {% endif %}
-          {% if not has_dns_primary %}
-            {% set _ = cmds.append('ip dns server-address ' ~ target_dns_primary) %}
-          {% endif %}
-          {% if not has_dns_secondary %}
-            {% set _ = cmds.append('ip dns server-address ' ~ target_dns_secondary) %}
-          {% endif %}
-          {{ cmds }}
+          {{
+            ([]
+             + ([ 'domain-name ' ~ target_domain ] if not has_domain else [])
+             + ([ 'ip dns server-address ' ~ target_dns_primary ] if not has_dns_primary else [])
+             + ([ 'ip dns server-address ' ~ target_dns_secondary ] if not has_dns_secondary else [])
+            )
+          }}
 
     - name: 4. Exibir pendencias identificadas
       ansible.builtin.debug:
         msg: >-
           Switch {{ inventory_hostname }}: 
-          {{ 'Em conformidade (Nenhuma alteracao necessaria)' if (commands_to_apply | length == 0) else 'Comandos a aplicar: ' ~ (commands_to_apply | join(', ')) }}
+          {{ 'Em conformidade (Nenhuma alteracao necessaria)' if (commands_to_apply | length == 0) else 'Comandos a aplicar: ' ~ (commands_to_apply | join(' | ')) }}
       when: not switch_unreachable
 
     - name: 5. Aplicar configuracoes faltantes no AOS-CX
