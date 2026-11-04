@@ -1,23 +1,19 @@
 ---
-- name: 1. Corrigir Servidor de Logging no Aruba AOS-CX
+- name: 1. Corrigir Servidor de Logging no Aruba AOS-CX (Validação com Prompts Separados)
   hosts: aruba_cx
   gather_facts: false
   serial: 1
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
-    
-    # Comandos exatos de limpeza e inclusão
-    # No AOS-CX, a remoção padrão do host é apenas 'no logging <host>'
     cmd_remove_old: "no logging logs.malwee.com.br"
     cmd_add_new: "logging log.malwee.com.br filter warning"
     
-    # Validações regex
     regex_old_present: '(?m)^\s*logging\s+logs\.malwee\.com\.br.*$'
     regex_new_present: '(?m)^\s*logging\s+log\.malwee\.com\.br\s+filter\s+warning\s*$'
 
   tasks:
-    - name: 1. Consultar configuracao de logging existente
+    - name: 1. Consultar estado atual
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
@@ -32,13 +28,13 @@
       register: run_config_output
       failed_when: false
 
-    - name: 2. Avaliar presenca das linhas
+    - name: 2. Avaliar presenca
       ansible.builtin.set_fact:
         switch_unreachable: "{{ run_config_output.rc is not defined or run_config_output.rc not in [0, 255] or 'command exceeded timeout' in (run_config_output.msg | default('')) }}"
         has_old_logging: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(regex_old_present)) }}"
         has_new_logging: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(regex_new_present)) }}"
 
-    - name: 3. Compilar lista de comandos dentro do config
+    - name: 3. Montar lista de comandos
       ansible.builtin.set_fact:
         cmds_to_run: >-
           {{
@@ -48,25 +44,17 @@
             )
           }}
 
-    - name: 4. Exibir intencao
-      ansible.builtin.debug:
-        msg: >-
-          Switch {{ inventory_hostname }}: 
-          {{ 'Nenhuma alteracao necessaria' if (cmds_to_run | length == 0) else 'Aplicando: ' ~ (cmds_to_run | join(' -> ')) }}
-      when: not switch_unreachable
-
-    # ETAPA CRÍTICA: Trata separadamente o prompt de Enable (#) e o prompt de Configuração ((config)#)
-    - name: 5. Aplicar correcoes de logging e gravar
+    - name: 4. Aplicar correcao respeitando o prompt (config)#
       ansible.builtin.expect:
         command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
         responses:
           "(?i)password:": "{{ ansible_password }}\n"
-          # Quando estiver no modo enable, envia 'config' ou salva/sai
+          # Quando estiver no modo enable: entra em config, grava e encerra
           "(?i)[a-z0-9_.-]+#":
             - "config"
             - "write memory"
             - "exit"
-          # Quando estiver dentro do modo config, envia as alteracoes e sai com 'end'
+          # Quando o switch responder com o prompt de configuracao: injeta comandos e volta com end
           "(?i)[a-z0-9_.-]+\\(config\\)#": "{{ cmds_to_run + ['end'] }}"
         timeout: 60
         echo: true
@@ -75,26 +63,21 @@
         - not switch_unreachable
         - cmds_to_run | length > 0
       register: config_apply_output
-      failed_when: config_apply_output.rc not in [0, 255]
 
-- name: 2. Relatorio Consolidado Pos-Correcao
-  hosts: localhost
-  gather_facts: false
+    - name: 5. Validar o show running-config resultante
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#":
+            - "no page"
+            - "show running-config | include logging"
+            - "exit"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      register: post_check
 
-  tasks:
-    - name: Exibir consolidado das alteracoes
+    - name: 6. Exibir o resultado final da running-config
       ansible.builtin.debug:
-        msg:
-          - "======================================================="
-          - "RELATORIO DE CORRECAO - LOGGING AOS-CX"
-          - "======================================================="
-          - "SWITCHES PROCESSADOS:"
-          - >-
-            {% set alterados = [] %}
-            {% for host in groups['aruba_cx'] %}
-              {% if (hostvars[host].cmds_to_run | default([]) | length > 0) and not (hostvars[host].switch_unreachable | default(false)) %}
-                {% set _ = alterados.append(host) %}
-              {% endif %}
-            {% endfor %}
-            {{ alterados }}
-          - "======================================================="
+        msg: "{{ post_check.stdout_lines | select('search', 'logging') | list }}"
