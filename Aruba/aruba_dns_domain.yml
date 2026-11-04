@@ -1,0 +1,100 @@
+---
+- name: 1. Auditar DNS e Domain-Name nos Switches Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    target_domain: "malwee.com.br"
+    target_dns_primary: "10.4.0.10"
+    target_dns_secondary: "10.4.0.11"
+
+  tasks:
+    - name: Consultar DNS e Domain-Name via CLI
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#":
+            - "no page"
+            - "show ip dns"
+            - "show domain-name"
+            - "exit"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      register: dns_audit_raw
+      failed_when: false
+
+    - name: Avaliar status de conformidade
+      ansible.builtin.set_fact:
+        has_domain: "{{ (dns_audit_raw.stdout is defined) and (target_domain in dns_audit_raw.stdout) }}"
+        has_dns: "{{ (dns_audit_raw.stdout is defined) and ((target_dns_primary in dns_audit_raw.stdout) or (target_dns_secondary in dns_audit_raw.stdout)) }}"
+        switch_unreachable: "{{ dns_audit_raw.rc is not defined or dns_audit_raw.rc not in [0, 255] or 'command exceeded timeout' in (dns_audit_raw.msg | default('')) }}"
+
+    - name: Consolidar status geral do switch
+      ansible.builtin.set_fact:
+        is_fully_compliant: "{{ has_domain and has_dns and not switch_unreachable }}"
+
+    - name: Exibir status individual
+      ansible.builtin.debug:
+        msg: >-
+          Switch {{ inventory_hostname }}:
+          DNS: {{ 'OK' if has_dns else 'AUSENTE' }} |
+          Domain-Name: {{ 'OK' if has_domain else 'AUSENTE' }} |
+          Status: {{ 'CONFORME' if is_fully_compliant else 'NAO CONFORME' }}
+
+- name: 2. Relatorio Consolidado de DNS e Dominio
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Exibir resumo da rede
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "RELATORIO GERAL - DNS E DOMAIN-NAME"
+          - "======================================================="
+          - "TOTAL DE SWITCHES AUDITADOS: {{ groups['aruba_cx'] | length }}"
+          - "-------------------------------------------------------"
+          - "TOTALMENTE CONFORMES (DNS + DOMINIO OK):"
+          - >-
+            {% set conformes = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if hostvars[host].is_fully_compliant | default(false) %}
+                {% set _ = conformes.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ conformes }}
+          - "-------------------------------------------------------"
+          - "FALTA DOMAIN-NAME (malwee.com.br):"
+          - >-
+            {% set sem_domain = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if not (hostvars[host].has_domain | default(false)) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = sem_domain.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ sem_domain }}
+          - "-------------------------------------------------------"
+          - "FALTA SERVIDOR DNS:"
+          - >-
+            {% set sem_dns = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if not (hostvars[host].has_dns | default(false)) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = sem_dns.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ sem_dns }}
+          - "-------------------------------------------------------"
+          - "FALHA DE CONEXAO / TIMEOUT:"
+          - >-
+            {% set falhas = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if hostvars[host].switch_unreachable | default(false) %}
+                {% set _ = falhas.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ falhas }}
+          - "======================================================="
