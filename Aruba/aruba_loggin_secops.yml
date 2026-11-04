@@ -18,15 +18,16 @@
             - "no page"
             - "show running-config | include {{ target_log_server }}"
             - "exit"
-        timeout: 15
+        timeout: 60
         echo: true
       delegate_to: localhost
       register: run_config_output
-      failed_when: run_config_output.rc not in [0, 255]
+      failed_when: false
 
     - name: Salvar status de presenca da configuracao
       ansible.builtin.set_fact:
-        has_log_configured: "{{ run_config_output.stdout is search(target_log_server) }}"
+        has_log_configured: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(target_log_server)) }}"
+        switch_unreachable: "{{ run_config_output.rc is not defined or run_config_output.rc not in [0, 255] or 'command exceeded timeout' in (run_config_output.msg | default('')) }}"
 
 - name: 2. Gerar Relatorio Consolidado
   hosts: localhost
@@ -48,5 +49,8 @@
           - "{{ groups['aruba_cx'] | select('extract', hostvars, 'has_log_configured') | list }}"
           - "-------------------------------------------------------"
           - "SWITCHES NAO CONFORMES (SEM O LOGGING):"
-          - "{{ groups['aruba_cx'] | reject('extract', hostvars, 'has_log_configured') | list }}"
+          - "{{ groups['aruba_cx'] | reject('extract', hostvars, 'has_log_configured') | reject('extract', hostvars, 'switch_unreachable') | list }}"
+          - "-------------------------------------------------------"
+          - "SWITCHES COM FALHA DE CONEXAO / TIMEOUT:"
+          - "{{ groups['aruba_cx'] | select('extract', hostvars, 'switch_unreachable') | list }}"
           - "======================================================="
