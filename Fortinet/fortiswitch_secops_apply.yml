@@ -1,0 +1,109 @@
+---
+- name: Padronizar Syslog (log.malwee.com.br) em FortiSwitches Standalone
+  hosts: fortiswitch
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: false
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    syslog_server: "log.malwee.com.br"
+
+  tasks:
+    - name: 1. Criar script de aplicacao Paramiko para Syslog no FortiSwitch
+      ansible.builtin.copy:
+        dest: "/tmp/executa_fortiswitch_logging.py"
+        mode: "0755"
+        content: |
+          import os
+          import sys
+          import time
+          import paramiko
+
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          host = os.environ.get("TARGET_HOST")
+          user = os.environ.get("TARGET_USER")
+          password = os.environ.get("TARGET_PASS")
+          port = int(os.environ.get("TARGET_PORT", 22))
+          server = os.environ.get("SYSLOG_SERVER")
+
+          try:
+              client.connect(
+                  host,
+                  port=port,
+                  username=user,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15
+              )
+              channel = client.invoke_shell()
+              time.sleep(1)
+
+              # Desativa paginacao, limpa e seta o novo loghost, salva com 'end'
+              commands = [
+                  "config system console",
+                  "set output standard",
+                  "end",
+                  "config log syslogd setting",
+                  "set status enable",
+                  f"set server \"{server}\"",
+                  "set mode udp",
+                  "set port 514",
+                  "set facility local7",
+                  "end",
+                  "show log syslogd setting",
+                  "exit"
+              ]
+
+              for cmd in commands:
+                  channel.send(cmd + "\n")
+                  time.sleep(0.6)
+
+              time.sleep(2)
+
+              output = ""
+              while channel.recv_ready():
+                  output += channel.recv(99999).decode("utf-8", errors="ignore")
+                  time.sleep(0.5)
+
+              client.close()
+              print(output)
+          except Exception as e:
+              sys.stderr.write(f"ERRO_DETALHADO: {type(e).__name__} -> {str(e)}\n")
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: 2. Aplicar configuracao de Syslog via SSH
+      ansible.builtin.command: python3 /tmp/executa_fortiswitch_logging.py
+      environment:
+        TARGET_HOST: "{{ inventory_hostname }}"
+        TARGET_USER: "{{ ansible_user }}"
+        TARGET_PASS: "{{ ansible_password }}"
+        TARGET_PORT: "{{ ssh_port }}"
+        SYSLOG_SERVER: "{{ syslog_server }}"
+      delegate_to: localhost
+      register: resultado_fortiswitch
+      ignore_errors: true
+
+    - name: 3. Limpar script temporario
+      ansible.builtin.file:
+        path: "/tmp/executa_fortiswitch_logging.py"
+        state: absent
+      delegate_to: localhost
+
+    - name: 4. Registrar falhas sem abortar o lote
+      ansible.builtin.debug:
+        msg:
+          - "❌ FALHA NO FORTISWITCH {{ inventory_hostname }}"
+          - "{{ resultado_fortiswitch.stderr_lines }}"
+      when: resultado_fortiswitch.rc != 0
+
+    - name: 5. Exibir configuracao ativa resultante
+      ansible.builtin.debug:
+        msg:
+          - "FortiSwitch {{ inventory_hostname }} configurado e salvo com sucesso."
+          - "{{ resultado_fortiswitch.stdout_lines | select('search', 'server|status|facility') | list }}"
+      when: resultado_fortiswitch.rc == 0
