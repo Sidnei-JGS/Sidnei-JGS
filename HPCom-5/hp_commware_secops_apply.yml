@@ -3,6 +3,7 @@
   hosts: hp_comware
   gather_facts: false
   serial: 1
+  any_errors_fatal: false
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
@@ -18,7 +19,6 @@
           import time
           import paramiko
 
-          # Força cifras legadas e KEX suportados pelo Comware 5
           paramiko.Transport._preferred_kex = (
               'diffie-hellman-group1-sha1',
               'diffie-hellman-group14-sha1',
@@ -53,7 +53,6 @@
               channel = client.invoke_shell()
               time.sleep(1)
 
-              # Sequência com alternância correta entre system-view e user-view
               commands = [
                   "system-view",
                   "info-center source default channel 2 log level alerts",
@@ -61,8 +60,8 @@
                   "undo info-center loghost 172.16.3.173",
                   "undo info-center loghost logs.malwee.com.br",
                   "info-center loghost log.malwee.com.br",
-                  "return",          # Volta para o modo de usuário <Switch>
-                  "save force",       # Salva na flash sem confirmação interativa
+                  "return",
+                  "save force",
                   "screen-length 0 temporary",
                   "display current-configuration | include (info-center|loghost)",
                   "quit"
@@ -103,14 +102,11 @@
         state: absent
       delegate_to: localhost
 
-    - name: 4. Validar resultado da execucao
-      ansible.builtin.fail:
+    - name: 4. Registrar falha sem abortar a execucao dos proximos switches
+      ansible.builtin.debug:
         msg:
-          - "❌ FALHA AO APLICAR NO SWITCH {{ inventory_hostname }}"
-          - "--- MENSAGEM DE ERRO (STDERR) ---"
+          - "❌ FALHA NO SWITCH {{ inventory_hostname }}"
           - "{{ resultado_comware.stderr_lines }}"
-          - "--- SAIDA DO TERMINAL (STDOUT) ---"
-          - "{{ resultado_comware.stdout_lines }}"
       when: resultado_comware.rc != 0
 
     - name: 5. Exibir configuracao ativa resultante
@@ -118,3 +114,4 @@
         msg:
           - "Switch {{ inventory_hostname }} configurado e salvo com sucesso."
           - "{{ resultado_comware.stdout_lines | select('search', 'info-center') | list }}"
+      when: resultado_comware.rc == 0
