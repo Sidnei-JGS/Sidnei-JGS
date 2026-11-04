@@ -1,0 +1,132 @@
+---
+- name: 1. Auditar e Corrigir DNS e Domain-Name no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    target_domain: "malwee.com.br"
+    target_dns_primary: "10.4.0.10"
+    target_dns_secondary: "10.4.0.11"
+
+  tasks:
+    - name: 1. Consultar status atual de DNS e Domain-Name
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#":
+            - "no page"
+            - "show ip dns"
+            - "show domain-name"
+            - "exit"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      register: dns_audit_raw
+      failed_when: false
+
+    - name: 2. Validar presenca dos parametros
+      ansible.builtin.set_fact:
+        has_domain: "{{ (dns_audit_raw.stdout is defined) and (target_domain in dns_audit_raw.stdout) }}"
+        has_dns_primary: "{{ (dns_audit_raw.stdout is defined) and (target_dns_primary in dns_audit_raw.stdout) }}"
+        has_dns_secondary: "{{ (dns_audit_raw.stdout is defined) and (target_dns_secondary in dns_audit_raw.stdout) }}"
+        switch_unreachable: "{{ dns_audit_raw.rc is not defined or dns_audit_raw.rc not in [0, 255] or 'command exceeded timeout' in (dns_audit_raw.msg | default('')) }}"
+
+    - name: 3. Montar lista de comandos faltantes
+      ansible.builtin.set_fact:
+        commands_to_apply: >-
+          {% set cmds = [] %}
+          {% if not has_domain %}
+            {% set _ = cmds.append('domain-name ' ~ target_domain) %}
+          {% endif %}
+          {% if not has_dns_primary %}
+            {% set _ = cmds.append('ip dns server-address ' ~ target_dns_primary) %}
+          {% endif %}
+          {% if not has_dns_secondary %}
+            {% set _ = cmds.append('ip dns server-address ' ~ target_dns_secondary) %}
+          {% endif %}
+          {{ cmds }}
+
+    - name: 4. Exibir pendencias identificadas
+      ansible.builtin.debug:
+        msg: >-
+          Switch {{ inventory_hostname }}: 
+          {{ 'Em conformidade (Nenhuma alteracao necessaria)' if (commands_to_apply | length == 0) else 'Comandos a aplicar: ' ~ (commands_to_apply | join(', ')) }}
+      when: not switch_unreachable
+
+    - name: 5. Aplicar configuracoes faltantes no AOS-CX
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#": "{{ ['config'] + commands_to_apply + ['end', 'exit'] }}"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      when: 
+        - not switch_unreachable
+        - commands_to_apply | length > 0
+      register: config_apply_output
+      failed_when: config_apply_output.rc not in [0, 255]
+
+    - name: 6. Salvar configuracao (write memory)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#":
+            - "write memory"
+            - "exit"
+        timeout: 60
+      delegate_to: localhost
+      when: 
+        - not switch_unreachable
+        - commands_to_apply | length > 0
+      register: save_output
+      failed_when: save_output.rc not in [0, 255]
+
+- name: 2. Relatorio Consolidado Final
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Exibir resumo da execucao
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "RELATORIO DE EXECUCAO - DNS E DOMAIN-NAME"
+          - "======================================================="
+          - "TOTAL DE SWITCHES AUDITADOS: {{ groups['aruba_cx'] | length }}"
+          - "-------------------------------------------------------"
+          - "JA ESTAVAM CONFORMES (SEM ALTERACAO):"
+          - >-
+            {% set intactos = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if (hostvars[host].commands_to_apply | default([]) | length == 0) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = intactos.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ intactos }}
+          - "-------------------------------------------------------"
+          - "CORRIGIDOS COM SUCESSO (APLICADO + SALVO):"
+          - >-
+            {% set corrigidos = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if (hostvars[host].commands_to_apply | default([]) | length > 0) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = corrigidos.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ corrigidos }}
+          - "-------------------------------------------------------"
+          - "FALHA DE COMUNICACAO / TIMEOUT:"
+          - >-
+            {% set falhas = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if hostvars[host].switch_unreachable | default(false) %}
+                {% set _ = falhas.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ falhas }}
+          - "======================================================="
