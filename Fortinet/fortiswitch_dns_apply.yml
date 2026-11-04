@@ -1,0 +1,111 @@
+---
+- name: Remover FortiGuard DNS e Padronizar DNS Corporativo no FortiSwitch
+  hosts: fortiswitch
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: false
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    dns_primario: "10.4.0.10"
+    dns_secundario: "10.4.0.11"
+
+  tasks:
+    - name: 1. Criar script Paramiko para limpeza e configuracao de DNS
+      ansible.builtin.copy:
+        dest: "/tmp/executa_fortiswitch_dns_clean.py"
+        mode: "0755"
+        content: |
+          import os
+          import sys
+          import time
+          import paramiko
+
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          host = os.environ.get("TARGET_HOST")
+          user = os.environ.get("TARGET_USER")
+          password = os.environ.get("TARGET_PASS")
+          port = int(os.environ.get("TARGET_PORT", 22))
+          dns1 = os.environ.get("DNS_1")
+          dns2 = os.environ.get("DNS_2")
+
+          try:
+              client.connect(
+                  host,
+                  port=port,
+                  username=user,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15
+              )
+              channel = client.invoke_shell()
+              time.sleep(1)
+
+              # Desativa paginacao, limpa padroes FortiGuard e seta os novos servidores
+              commands = [
+                  "config system console",
+                  "set output standard",
+                  "end",
+                  "config system dns",
+                  "unset primary",
+                  "unset secondary",
+                  f"set primary {dns1}",
+                  f"set secondary {dns2}",
+                  "end",
+                  "show system dns",
+                  "exit"
+              ]
+
+              for cmd in commands:
+                  channel.send(cmd + "\n")
+                  time.sleep(0.6)
+
+              time.sleep(2)
+
+              output = ""
+              while channel.recv_ready():
+                  output += channel.recv(99999).decode("utf-8", errors="ignore")
+                  time.sleep(0.5)
+
+              client.close()
+              print(output)
+          except Exception as e:
+              sys.stderr.write(f"ERRO_DETALHADO: {type(e).__name__} -> {str(e)}\n")
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: 2. Aplicar correcao de DNS via SSH
+      ansible.builtin.command: python3 /tmp/executa_fortiswitch_dns_clean.py
+      environment:
+        TARGET_HOST: "{{ inventory_hostname }}"
+        TARGET_USER: "{{ ansible_user }}"
+        TARGET_PASS: "{{ ansible_password }}"
+        TARGET_PORT: "{{ ssh_port }}"
+        DNS_1: "{{ dns_primario }}"
+        DNS_2: "{{ dns_secundario }}"
+      delegate_to: localhost
+      register: resultado_dns_fortiswitch
+      ignore_errors: true
+
+    - name: 3. Limpar script temporario
+      ansible.builtin.file:
+        path: "/tmp/executa_fortiswitch_dns_clean.py"
+        state: absent
+      delegate_to: localhost
+
+    - name: 4. Registrar falha sem parar a fila
+      ansible.builtin.debug:
+        msg:
+          - "❌ FALHA NO FORTISWITCH {{ inventory_hostname }}"
+          - "{{ resultado_dns_fortiswitch.stderr_lines }}"
+      when: resultado_dns_fortiswitch.rc != 0
+
+    - name: 5. Exibir configuracao ativa resultante
+      ansible.builtin.debug:
+        msg:
+          - "FortiSwitch {{ inventory_hostname }} DNS atualizado com sucesso."
+          - "{{ resultado_dns_fortiswitch.stdout_lines | select('search', 'primary|secondary') | list }}"
+      when: resultado_dns_fortiswitch.rc == 0
