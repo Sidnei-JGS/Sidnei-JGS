@@ -1,0 +1,91 @@
+---
+- name: 1. Aplicar Padronizacao de Logging no HP Comware 5
+  hosts: hp_comware5
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+
+  tasks:
+    - name: 1. Executar comandos de configuracao e salvar
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          # No modo de usuário (<Switch>): entra em system-view, depois salva e sai
+          "(?i)<[a-z0-9_.-]+>":
+            - "system-view"
+            - "save force"
+            - "quit"
+          # No modo de sistema ([Switch]): executa a sequencia exata solicitada e volta com return
+          "(?i)\\[[a-z0-9_.-]+\\]":
+            - "info-center source default channel 2 log level alerts"
+            - "undo info-center loghost 10.4.4.100"
+            - "undo info-center loghost 172.16.3.173"
+            - "undo info-center loghost logs.malwee.com.br"
+            - "info-center loghost log.malwee.com.br"
+            - "return"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      register: apply_output
+      failed_when: false
+
+    - name: 2. Validar configuracao resultante (show pós-aplicacao)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)<[a-z0-9_.-]+>":
+            - "screen-length 0 temporary"
+            - "display current-configuration | include (info-center|loghost)"
+            - "quit"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      register: verify_output
+      when: apply_output.rc in [0, 255]
+      failed_when: false
+
+    - name: 3. Exibir linhas ativas de logging no switch
+      ansible.builtin.debug:
+        msg:
+          - "Switch: {{ inventory_hostname }}"
+          - "Status Execucao: {{ 'OK' if apply_output.rc in [0, 255] else 'FALHA DE COMUNICACAO / TIMEOUT' }}"
+          - "Configuracao Ativa:"
+          - "{{ verify_output.stdout_lines | default([]) | select('search', 'info-center') | list }}"
+
+- name: 2. Relatorio Consolidado Final
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Exibir resumo geral
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "CONCLUSAO DE APLICACAO - LOGGING COMWARE 5"
+          - "======================================================="
+          - "TOTAL DE SWITCHES PROCESSADOS: {{ groups['hp_comware5'] | length }}"
+          - "-------------------------------------------------------"
+          - "SUCESSO (APLICADOS E SALVOS COM SAVE FORCE):"
+          - >-
+            {% set ok_hosts = [] %}
+            {% for host in groups['hp_comware5'] %}
+              {% if hostvars[host].apply_output.rc | default(1) in [0, 255] %}
+                {% set _ = ok_hosts.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ ok_hosts }}
+          - "-------------------------------------------------------"
+          - "FALHA / TIMEOUT:"
+          - >-
+            {% set fail_hosts = [] %}
+            {% for host in groups['hp_comware5'] %}
+              {% if hostvars[host].apply_output.rc | default(1) not in [0, 255] %}
+                {% set _ = fail_hosts.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ fail_hosts }}
+          - "======================================================="
