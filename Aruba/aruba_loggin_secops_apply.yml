@@ -1,0 +1,130 @@
+---
+- name: 1. Corrigir Servidor de Logging no Aruba AOS-CX
+  hosts: aruba_cx
+  gather_facts: false
+  serial: 1
+
+  vars:
+    ssh_port: "{{ ansible_port | default(22) }}"
+    
+    # Comandos exatos de remoção e inclusão
+    cmd_remove_old: "no logging logs.malwee.com.br filter warning"
+    cmd_add_new: "logging log.malwee.com.br filter warning"
+    
+    # Expressões regulares estritas para detecção na running-config
+    regex_old_present: '(?m)^\s*logging\s+logs\.malwee\.com\.br\s+filter\s+warning\s*$'
+    regex_new_present: '(?m)^\s*logging\s+log\.malwee\.com\.br\s+filter\s+warning\s*$'
+
+  tasks:
+    - name: 1. Consultar configuracao de logging existente
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#":
+            - "no page"
+            - "show running-config | include logging"
+            - "exit"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      register: run_config_output
+      failed_when: false
+
+    - name: 2. Avaliar presenca das configuracoes
+      ansible.builtin.set_fact:
+        switch_unreachable: "{{ run_config_output.rc is not defined or run_config_output.rc not in [0, 255] or 'command exceeded timeout' in (run_config_output.msg | default('')) }}"
+        has_old_logging: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(regex_old_present)) }}"
+        has_new_logging: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(regex_new_present)) }}"
+
+    - name: 3. Compilar lista de comandos de correcao
+      ansible.builtin.set_fact:
+        cmds_to_run: >-
+          {{
+            ([]
+             + ([ cmd_remove_old ] if has_old_logging else [])
+             + ([ cmd_add_new ] if not has_new_logging else [])
+            )
+          }}
+
+    - name: 4. Exibir acoes que serao executadas
+      ansible.builtin.debug:
+        msg: >-
+          Switch {{ inventory_hostname }}: 
+          {{ 'Nenhuma alteracao necessaria (Ja padronizado)' if (cmds_to_run | length == 0) else 'Comandos: ' ~ (cmds_to_run | join(' | ')) }}
+      when: not switch_unreachable
+
+    - name: 5. Aplicar correcoes de logging (apenas se necessario)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#": "{{ ['config'] + cmds_to_run + ['end', 'exit'] }}"
+        timeout: 60
+        echo: true
+      delegate_to: localhost
+      when:
+        - not switch_unreachable
+        - cmds_to_run | length > 0
+      register: config_apply_output
+      failed_when: config_apply_output.rc not in [0, 255]
+
+    - name: 6. Salvar configuracao (write memory)
+      ansible.builtin.expect:
+        command: "ssh -o StrictHostKeyChecking=no -p {{ ssh_port }} {{ ansible_user }}@{{ inventory_hostname }}"
+        responses:
+          "(?i)password:": "{{ ansible_password }}\n"
+          "(?i)[a-z0-9_.-]+#":
+            - "write memory"
+            - "exit"
+        timeout: 60
+      delegate_to: localhost
+      when:
+        - not switch_unreachable
+        - cmds_to_run | length > 0
+      register: save_output
+      failed_when: save_output.rc not in [0, 255]
+
+- name: 2. Relatorio Consolidado da Execucao
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Exibir consolidado das alteracoes
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "RELATORIO DE CORRECAO - LOGGING AOS-CX"
+          - "======================================================="
+          - "TOTAL DE SWITCHES AUDITADOS: {{ groups['aruba_cx'] | length }}"
+          - "-------------------------------------------------------"
+          - "JA ESTAVAM CORRETOS (SEM ALTERACAO):"
+          - >-
+            {% set sem_mudanca = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if (hostvars[host].cmds_to_run | default([]) | length == 0) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = sem_mudanca.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ sem_mudanca }}
+          - "-------------------------------------------------------"
+          - "SWITCHES CORRIGIDOS (REMOVIDO / ADICIONADO E SALVO):"
+          - >-
+            {% set alterados = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if (hostvars[host].cmds_to_run | default([]) | length > 0) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = alterados.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ alterados }}
+          - "-------------------------------------------------------"
+          - "FALHA DE COMUNICACAO / TIMEOUT:"
+          - >-
+            {% set falhas = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if hostvars[host].switch_unreachable | default(false) %}
+                {% set _ = falhas.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ falhas }}
+          - "======================================================="
