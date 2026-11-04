@@ -24,9 +24,9 @@
       register: run_config_output
       failed_when: false
 
-    - name: Salvar status de presenca da configuracao
+    - name: Salvar status da auditoria
       ansible.builtin.set_fact:
-        has_log_configured: "{{ (run_config_output.stdout is defined) and (run_config_output.stdout is search(target_log_server)) }}"
+        has_log_configured: "{{ (run_config_output.stdout is defined) and (target_log_server in run_config_output.stdout) }}"
         switch_unreachable: "{{ run_config_output.rc is not defined or run_config_output.rc not in [0, 255] or 'command exceeded timeout' in (run_config_output.msg | default('')) }}"
 
 - name: 2. Gerar Relatorio Consolidado
@@ -46,11 +46,32 @@
           - "TOTAL DE SWITCHES AUDITADOS: {{ groups['aruba_cx'] | length }}"
           - "-------------------------------------------------------"
           - "SWITCHES CONFORMES (OK):"
-          - "{{ groups['aruba_cx'] | select('extract', hostvars, 'has_log_configured') | list }}"
+          - >-
+            {% set conformes = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if hostvars[host].has_log_configured | default(false) %}
+                {% set _ = conformes.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ conformes }}
           - "-------------------------------------------------------"
           - "SWITCHES NAO CONFORMES (SEM O LOGGING):"
-          - "{{ groups['aruba_cx'] | reject('extract', hostvars, 'has_log_configured') | reject('extract', hostvars, 'switch_unreachable') | list }}"
+          - >-
+            {% set nao_conformes = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if not (hostvars[host].has_log_configured | default(false)) and not (hostvars[host].switch_unreachable | default(false)) %}
+                {% set _ = nao_conformes.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ nao_conformes }}
           - "-------------------------------------------------------"
           - "SWITCHES COM FALHA DE CONEXAO / TIMEOUT:"
-          - "{{ groups['aruba_cx'] | select('extract', hostvars, 'switch_unreachable') | list }}"
+          - >-
+            {% set falhas = [] %}
+            {% for host in groups['aruba_cx'] %}
+              {% if hostvars[host].switch_unreachable | default(false) %}
+                {% set _ = falhas.append(host) %}
+              {% endif %}
+            {% endfor %}
+            {{ falhas }}
           - "======================================================="
