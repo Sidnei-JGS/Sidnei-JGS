@@ -130,6 +130,14 @@ PADROES_TC = [
     r"Number of topology changes" + H + ":?" + H + r"(\d+)",
     r"TCN Events.*?Received" + H + r"(\d+)",                 # FortiSwitch
 ]
+# STP habilitado mas sem nenhuma instancia/VLAN ativa, ou desabilitado: o switch
+# NAO participa do spanning-tree (nao bloqueia loops).
+PADROES_STP_INATIVO = [
+    r"No STP instance present",                                    # Aruba CX (RPVST sem VLANs)
+    r"Spanning tree status" + H + ":" + H + r"Disabled",           # Aruba CX / ProCurve
+    r"Protocol status" + H + ":" + H + r"disabled",                # Comware
+    r"STP is not (?:enabled|running)",
+]
 # TCs gerados pelo PROPRIO switch (so o FortiSwitch informa direto)
 PADROES_TC_GERADOS = [
     r"TCN Events" + H + r"Triggered" + H + r"(\d+)",
@@ -155,6 +163,7 @@ def extrair(texto):
             if m:
                 resumo[campo] = int(m.group(1))
                 break
+    resumo["stp_inativo"] = any(re.search(p, texto, FLAGS) for p in PADROES_STP_INATIVO)
     # normaliza o modo
     if resumo["modo"]:
         modo = resumo["modo"].upper()
