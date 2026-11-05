@@ -76,62 +76,89 @@ def limpar(texto):
 # ---------------------------------------------------------------------------
 # Extracao do resumo (melhor esforco; a saida bruta sempre vai junto)
 # ---------------------------------------------------------------------------
+# Regras das regex: depois de ":" usar [ \t]* (nunca \s*), senao um campo VAZIO
+# "pula" para a linha seguinte e captura o texto errado.
+H = r"[ \t]*"
 PADROES = {
     "modo": [
-        r"\[Mode\s+(\w+)\]",                          # Comware
-        r"Protocol\s*:?\s*(MSTP|RSTP|RPVST\+?|STP)\b",  # Aruba CX / ProCurve
-        r"Protocol Std\.\s*:\s*IEEE\s*(802\.1\w+)",   # Comware (alternativo)
-        r"\bmode\s*:?\s*(mstp|rstp|stp)\b",           # FortiSwitch / genericos
+        r"\[Mode\s+(\w+)\]",                                  # Comware
+        r"Protocol" + H + r":?" + H + r"(MSTP|RSTP|RPVST\+?|STP)\b",  # Aruba CX / ProCurve
+        r"Protocol Std\." + H + ":" + H + r"IEEE" + H + r"(802\.1\w+)",
+        r"^" + H + r"(MST) Instance Information",              # FortiSwitch (sempre MSTP)
     ],
     "bridge": [
-        r"CIST Bridge\s*:\s*(\S+)",
-        r"Bridge ID\s*:\s*(\S+)",
-        r"Bridge ID\s+Priority\s*:\s*(\d+)\s+MAC-Address\s*:\s*(\S+)",
-        r"Switch MAC Address\s*:?\s*(\S+)",              # ProCurve
-        r"Switch Priority\s*:?\s*(\d+)",
+        r"CIST Bridge" + H + ":" + H + r"(\S+)",                # Comware
+        r"Bridge ID\s+Priority" + H + ":" + H + r"(\d+)\s+MAC-Address" + H + ":" + H + r"(\S+)",  # Aruba CX
+        r"Bridge ID" + H + ":" + H + r"(\S+)",
+        r"Switch MAC Address" + H + ":?" + H + r"(\S+)",        # ProCurve
+        r"Bridge MAC" + H + r"([0-9a-f]{12})",                  # FortiSwitch
     ],
     "root": [
-        r"CIST Root/ERPC\s*:\s*(\S+)",
-        r"Root ID\s+Priority\s*:\s*(\d+)\s+MAC-Address\s*:\s*(\S+)",
-        r"CST Root MAC Address\s*:?\s*(\S+)",
-        r"Root MAC Address\s*:?\s*(\S+)",                # FortiSwitch
-        r"Root\s*:\s*(\S+)",
+        r"CIST Root/ERPC" + H + ":" + H + r"(\S+)",             # Comware
+        r"Root ID\s+Priority" + H + ":" + H + r"(\d+)\s+MAC-Address" + H + ":" + H + r"(\S+)",    # Aruba CX
+        r"CST Root MAC Address" + H + ":?" + H + r"(\S+)",      # ProCurve
+        r"^" + H + r"Root" + H + r"MAC" + H + r"([0-9a-f]{12})",  # FortiSwitch
     ],
     "regiao_nome": [
-        r"Region name\s*:\s*(\S.*)",
-        r"MST config ID\s*:\s*(\S.*)",
-        r"Configuration Name\s*:\s*(\S.*)",
+        r"Region name" + H + ":" + H + r"(\S.*)",
+        r"MST config ID" + H + ":" + H + r"(\S.*)",
+        r"Configuration Name" + H + ":" + H + r"(\S.*)",
     ],
     "regiao_revisao": [
-        r"Revision level\s*:\s*(\d+)",
-        r"MST config revision\s*:\s*(\d+)",
-        r"Configuration Revision\s*:\s*(\d+)",
-        r"Revision Level\s*:\s*(\d+)",
+        r"Revision level" + H + ":" + H + r"(\d+)",
+        r"MST config revision" + H + ":" + H + r"(\d+)",
+        r"Configuration Revision" + H + ":" + H + r"(\d+)",
     ],
     "regiao_digest": [
-        r"Configuration digest\s*:\s*(\S+)",
-        r"MST config digest\s*:\s*(\S+)",
-        r"Configuration Digest\s*:\s*(\S+)",
+        r"Configuration digest" + H + ":" + H + r"(\S+)",
+        r"MST config digest" + H + ":" + H + r"(\S+)",
     ],
     "bpdu_protection_global": [
-        r"BPDU-Protection\s*:\s*(\w+)",
+        r"BPDU-Protection" + H + ":" + H + r"(\w+)",
+    ],
+    "ultimo_tc": [
+        r"Time since last TC" + H + ":" + H + r"(\S.*)",                     # Comware
+        r"Time since last (?:topology )?change" + H + ":?" + H + r"(\S.*)",  # Aruba CX / ProCurve
+        r"TCN Events.*?Received" + H + r"\d+" + H + r"\((.*?)" + H + r"ago\)",  # FortiSwitch
     ],
 }
+
+# contadores de mudanca de topologia (TC): a primeira ocorrencia e a global/CIST
+PADROES_TC = [
+    r"TC or TCN received" + H + ":" + H + r"(\d+)",          # Comware
+    r"Topology [Cc]hange [Cc]ount" + H + ":?" + H + r"(\d+)",  # Aruba CX / ProCurve
+    r"Number of topology changes" + H + ":?" + H + r"(\d+)",
+    r"TCN Events.*?Received" + H + r"(\d+)",                 # FortiSwitch
+]
+# TCs gerados pelo PROPRIO switch (so o FortiSwitch informa direto)
+PADROES_TC_GERADOS = [
+    r"TCN Events" + H + r"Triggered" + H + r"(\d+)",
+]
+FLAGS = re.IGNORECASE | re.MULTILINE
 
 
 def extrair(texto):
     resumo = {}
     for campo, padroes in PADROES.items():
         for p in padroes:
-            m = re.search(p, texto, re.IGNORECASE)
+            m = re.search(p, texto, FLAGS)
             if m:
                 resumo[campo] = ".".join(g.strip() for g in m.groups() if g)
                 break
         else:
             resumo[campo] = None
+    # TC: primeira ocorrencia = global/CIST
+    for campo, padroes in (("tc_recebidos", PADROES_TC), ("tc_gerados", PADROES_TC_GERADOS)):
+        resumo[campo] = None
+        for p in padroes:
+            m = re.search(p, texto, FLAGS)
+            if m:
+                resumo[campo] = int(m.group(1))
+                break
     # normaliza o modo
     if resumo["modo"]:
-        resumo["modo"] = resumo["modo"].upper().replace("802.1S", "MSTP").replace("802.1W", "RSTP")
+        modo = resumo["modo"].upper()
+        resumo["modo"] = {"MST": "MSTP", "802.1S": "MSTP", "802.1W": "RSTP", "802.1D": "STP"}.get(modo, modo)
     # Contagem de protecoes SO em linhas de configuracao (stp ... / spanning-tree ... / set ...),
     # para nao contar linhas de status como "BPDU-Protection : Disabled".
     config = "\n".join(l for l in texto.split("\n")
