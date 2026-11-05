@@ -8,7 +8,16 @@
 # enviado: o script files/coleta_somente_leitura.py recusa tudo que nao seja
 # display/show/get/diagnose stp.
 #
-# Credenciais: credencial de maquina do AWX (ansible_user / ansible_password).
+# Credenciais:
+#   - senha: credencial de maquina do AWX (ansible_password)
+#   - usuario: por plataforma, definido nas EXTRA VARS do job template no AWX
+#     (fora do repositorio). Plataforma sem entrada usa o usuario da credencial.
+#
+#     usuarios_por_plataforma:
+#       comware: "usuario@dominio"
+#       aruba_cx: "usuario"
+#       fortiswitch: "usuario"
+#       arubaos_switch: "usuario"
 #
 # Resultado:
 #   - por switch: saida bruta dos comandos (para analise detalhada)
@@ -19,10 +28,14 @@
   hosts: "hp_comware:aruba_cx:fortinet:aruba_os_switch"
   gather_facts: false
   any_errors_fatal: false
+  strategy: linear
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
-    ssh_user: "{{ ansible_user | default(ansible_ssh_user | default('')) }}"
+    usuarios_por_plataforma: {}
+    ssh_user: >-
+      {{ usuarios_por_plataforma[plataforma]
+         | default(ansible_user | default(ansible_ssh_user | default(''))) }}
     ssh_pass: "{{ ansible_password | default(ansible_ssh_pass | default(ansible_ssh_password | default(''))) }}"
 
     plataforma: >-
@@ -103,26 +116,31 @@
       when: not stp_resumo.coleta_ok
 
 
-- name: Relatorio consolidado de Spanning-Tree
-  hosts: localhost
-  gather_facts: false
-
-  vars:
-    todos: >-
-      {{ groups['all'] | map('extract', hostvars) | selectattr('stp_resumo', 'defined')
-         | map(attribute='stp_resumo') | list }}
-    ok: "{{ todos | selectattr('coleta_ok') | list }}"
-    falhas: "{{ todos | rejectattr('coleta_ok') | list }}"
-
-  tasks:
-    - name: 1. Calcular padrao predominante e divergencias
+    # -------------------------------------------------------------------------
+    # Relatorio consolidado: roda UMA vez, no proprio play (run_once), para
+    # funcionar mesmo quando o job usa Limit (o Limit tambem filtra localhost).
+    # -------------------------------------------------------------------------
+    - name: 5. Calcular padrao predominante e divergencias
+      run_once: true  # noqa: run-once[task] (play usa strategy linear, o padrao)
+      delegate_to: localhost
+      vars:
+        todos: >-
+          {{ ansible_play_hosts_all | map('extract', hostvars) | selectattr('stp_resumo', 'defined')
+             | map(attribute='stp_resumo') | list }}
+        ok: "{{ todos | selectattr('coleta_ok') | list }}"
       ansible.builtin.set_fact:
+        stp_todos: "{{ todos }}"
         analise: >-
-          {%- set ns = namespace(nome={}, rev={}, dig={}, modo={}, root={}) -%}
+          {%- set ns = namespace(nome={}, rev={}, dig={}, modo={}, root={}, macs={}) -%}
           {%- for h in ok -%}
-            {%- set mac = (h.root | default('', true) | regex_replace('[^0-9A-Fa-f]', '') | lower)[-12:] -%}
-            {%- for chave, valor in [('nome', h.regiao_nome), ('rev', h.regiao_revisao),
-                                    ('dig', h.regiao_digest), ('modo', h.modo), ('root', mac)] -%}
+            {%- set mac_root = (h.root | default('', true) | regex_replace('[^0-9A-Fa-f]', '') | lower)[-12:] -%}
+            {%- set mac_bridge = (h.bridge | default('', true) | regex_replace('[^0-9A-Fa-f]', '') | lower)[-12:] -%}
+            {%- if mac_bridge -%}{%- set _ = ns.macs.update({mac_bridge: h.hostname ~ ' (' ~ h.ip ~ ')'}) -%}{%- endif -%}
+            {%- set pares = [('modo', h.modo), ('root', mac_root)] -%}
+            {%- if h.modo == 'MSTP' -%}
+              {%- set pares = pares + [('nome', h.regiao_nome), ('rev', h.regiao_revisao), ('dig', h.regiao_digest)] -%}
+            {%- endif -%}
+            {%- for chave, valor in pares -%}
               {%- if valor -%}
                 {%- set d = ns[chave] -%}
                 {%- set _ = d.update({valor: d.get(valor, 0) + 1}) -%}
@@ -134,65 +152,92 @@
             {%- set itens = ns[chave] | dict2items | sort(attribute='value', reverse=true) -%}
             {%- set _ = ref.update({chave: (itens | first).key if itens else none}) -%}
           {%- endfor -%}
+          {%- set roots = [] -%}
+          {%- for mac, qtd in ns.root.items() -%}
+            {%- set _ = roots.append({'mac': mac, 'switches_que_apontam': qtd,
+                                      'quem_e': ns.macs.get(mac, 'fora do escopo auditado (core/outro equipamento)')}) -%}
+          {%- endfor -%}
           {%- set achados = [] -%}
           {%- for h in ok -%}
             {%- set p = [] -%}
-            {%- if h.modo and h.modo != 'MSTP' -%}{%- set _ = p.append('modo ' ~ h.modo ~ ' (esperado MSTP)') -%}{%- endif -%}
-            {%- if not h.modo -%}{%- set _ = p.append('modo nao identificado') -%}{%- endif -%}
-            {%- if h.regiao_nome and h.regiao_nome != ref.nome -%}
+            {%- if not h.modo -%}
+              {%- set _ = p.append('modo nao identificado') -%}
+            {%- elif h.modo != ref.modo -%}
+              {%- set _ = p.append('modo ' ~ h.modo ~ ' difere do predominante ' ~ ref.modo) -%}
+            {%- endif -%}
+            {%- if h.modo == 'MSTP' and h.regiao_nome and h.regiao_nome != ref.nome -%}
               {%- set _ = p.append('nome da regiao MST "' ~ h.regiao_nome ~ '" difere do predominante "' ~ ref.nome ~ '"') -%}
             {%- endif -%}
-            {%- if h.regiao_revisao and h.regiao_revisao != ref.rev -%}
+            {%- if h.modo == 'MSTP' and h.regiao_revisao and h.regiao_revisao != ref.rev -%}
               {%- set _ = p.append('revisao MST ' ~ h.regiao_revisao ~ ' difere da predominante ' ~ ref.rev) -%}
             {%- endif -%}
-            {%- if h.regiao_digest and h.regiao_digest != ref.dig -%}
+            {%- if h.modo == 'MSTP' and h.regiao_digest and h.regiao_digest != ref.dig -%}
               {%- set _ = p.append('digest MST (mapeamento VLAN x instancia) difere do predominante') -%}
             {%- endif -%}
             {%- if (h.linhas_edge | default(0)) == 0 and h.plataforma != 'fortiswitch' -%}
               {%- set _ = p.append('nenhuma porta edge configurada') -%}
             {%- endif -%}
-            {%- if (h.linhas_bpdu_guard | default(0)) == 0 -%}{%- set _ = p.append('sem BPDU guard/protection configurado') -%}{%- endif -%}
+            {%- if (h.linhas_bpdu_guard | default(0)) == 0 -%}
+              {%- set _ = p.append('sem BPDU guard/protection configurado') -%}
+            {%- endif -%}
             {%- if p -%}
               {%- set _ = achados.append({'switch': h.hostname ~ ' (' ~ h.ip ~ ')', 'rack': h.rack, 'achados': p}) -%}
             {%- endif -%}
           {%- endfor -%}
+          {%- set tc = ok | selectattr('tc_recebidos', 'defined') | rejectattr('tc_recebidos', 'none')
+                          | sort(attribute='tc_recebidos', reverse=true) -%}
           {{ {'referencia': ref, 'contagem_modo': ns.modo, 'contagem_regiao_nome': ns.nome,
-              'contagem_revisao': ns.rev, 'contagem_digest': ns.dig,
-              'roots_cist_vistos': ns.root, 'achados': achados} }}
+              'contagem_revisao': ns.rev, 'contagem_digest': ns.dig, 'roots_cist': roots,
+              'mais_mudancas_topologia': tc[:10] | map(attribute='hostname')
+                                         | zip(tc[:10] | map(attribute='tc_recebidos'),
+                                               tc[:10] | map(attribute='ultimo_tc'),
+                                               tc[:10] | map(attribute='tc_gerados', default='n/d')) | list,
+              'achados': achados} }}
 
-    - name: 2. Relatorio
+    - name: 6. Relatorio
+      run_once: true  # noqa: run-once[task] (play usa strategy linear, o padrao)
+      delegate_to: localhost
       ansible.builtin.debug:
         msg:
           - "=== AUDITORIA DE SPANNING-TREE ==="
-          - "Switches auditados: {{ ok | length }} | falhas de coleta: {{ falhas | length }}"
-          - "Modo STP: {{ analise.contagem_modo }}"
-          - "Regiao MST predominante: nome={{ analise.referencia.nome }} revisao={{ analise.referencia.rev }}"
-          - "Nomes de regiao vistos: {{ analise.contagem_regiao_nome }}"
-          - "Digests vistos: {{ analise.contagem_digest }}"
           - >-
-            Root CIST (MAC) visto pelos switches: {{ analise.roots_cist_vistos }}
-            {{ '-> OK, um unico root' if analise.roots_cist_vistos | length == 1
-               else '-> ATENCAO: mais de um root = dominios STP separados ou regioes divergentes' }}
+            Switches auditados: {{ stp_todos | selectattr('coleta_ok') | list | length }}
+            | falhas de coleta: {{ stp_todos | rejectattr('coleta_ok') | list | length }}
+          - "Modo STP: {{ analise.contagem_modo }}"
+          - >-
+            Regiao MST (so switches em MSTP): nomes={{ analise.contagem_regiao_nome }}
+            revisoes={{ analise.contagem_revisao }} digests={{ analise.contagem_digest }}
+          - "Root CIST: {{ analise.roots_cist }}"
+          - >-
+            {{ 'OK: todos apontam para o mesmo root' if analise.roots_cist | length <= 1
+               else 'ATENCAO: mais de um root = dominios STP separados ou regioes divergentes' }}
+          - "Mais mudancas de topologia (switch, TC recebidos, ultimo TC, TC gerados pelo proprio switch): {{ analise.mais_mudancas_topologia }}"
           - "Switches com achados: {{ analise.achados | length }}"
 
-    - name: 3. Achados por switch
+    - name: 7. Achados por switch
+      run_once: true  # noqa: run-once[task] (play usa strategy linear, o padrao)
+      delegate_to: localhost
       ansible.builtin.debug:
         msg: "{{ item.switch }} [{{ item.rack }}]: {{ item.achados | join('; ') }}"
       loop: "{{ analise.achados }}"
       loop_control:
         label: "{{ item.switch }}"
 
-    - name: 4. Falhas de coleta
+    - name: 8. Falhas de coleta
+      run_once: true  # noqa: run-once[task] (play usa strategy linear, o padrao)
+      delegate_to: localhost
       ansible.builtin.debug:
         msg: "{{ item.hostname }} ({{ item.ip }}): {{ item.erro }}"
-      loop: "{{ falhas }}"
+      loop: "{{ stp_todos | rejectattr('coleta_ok') | list }}"
       loop_control:
         label: "{{ item.hostname }}"
 
-    - name: 5. Publicar artefato no job do AWX
+    - name: 9. Publicar artefato no job do AWX
+      run_once: true  # noqa: run-once[task] (play usa strategy linear, o padrao)
+      delegate_to: localhost
       ansible.builtin.set_stats:
         data:
           auditoria_stp:
             analise: "{{ analise }}"
-            switches: "{{ todos }}"
+            switches: "{{ stp_todos }}"
         per_host: false
