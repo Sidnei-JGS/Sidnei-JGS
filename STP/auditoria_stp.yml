@@ -160,6 +160,9 @@
           {%- set achados = [] -%}
           {%- for h in ok -%}
             {%- set p = [] -%}
+            {%- if h.stp_inativo | default(false) -%}
+              {%- set _ = p.append('CRITICO: STP sem nenhuma instancia/VLAN ativa ou desabilitado - o switch NAO participa do spanning-tree') -%}
+            {%- endif -%}
             {%- if not h.modo -%}
               {%- set _ = p.append('modo nao identificado') -%}
             {%- elif h.modo != ref.modo -%}
@@ -212,6 +215,9 @@
             {{ 'OK: todos apontam para o mesmo root' if analise.roots_cist | length <= 1
                else 'ATENCAO: mais de um root = dominios STP separados ou regioes divergentes' }}
           - "Mais mudancas de topologia (switch, TC recebidos, ultimo TC, TC gerados pelo proprio switch): {{ analise.mais_mudancas_topologia }}"
+          - >-
+            Switches com STP inativo (CRITICO): {{ stp_todos | selectattr('stp_inativo', 'defined')
+            | selectattr('stp_inativo') | map(attribute='hostname') | list }}
           - "Switches com achados: {{ analise.achados | length }}"
 
     - name: 7. Achados por switch
