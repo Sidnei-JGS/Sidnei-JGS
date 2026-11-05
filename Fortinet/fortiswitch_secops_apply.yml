@@ -1,6 +1,6 @@
 ---
 - name: Padronizar DNS e Syslog em FortiSwitches Standalone
-  hosts: fortiswitch
+  hosts: fortinet
   gather_facts: false
   serial: 1
   any_errors_fatal: false
