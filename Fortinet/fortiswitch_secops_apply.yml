@@ -1,5 +1,5 @@
 ---
-- name: Padronizar Syslog (log.malwee.com.br) em FortiSwitches Standalone
+- name: Padronizar DNS e Syslog em FortiSwitches Standalone
   hosts: fortiswitch
   gather_facts: false
   serial: 1
@@ -7,12 +7,14 @@
 
   vars:
     ssh_port: "{{ ansible_port | default(22) }}"
+    dns_primario: "10.4.0.10"
+    dns_secundario: "10.4.0.11"
     syslog_server: "log.malwee.com.br"
 
   tasks:
-    - name: 1. Criar script de aplicacao Paramiko para Syslog no FortiSwitch
+    - name: 1. Criar script Paramiko unificado para FortiSwitchOS
       ansible.builtin.copy:
-        dest: "/tmp/executa_fortiswitch_logging.py"
+        dest: "/tmp/executa_fortiswitch_full.py"
         mode: "0755"
         content: |
           import os
@@ -27,7 +29,9 @@
           user = os.environ.get("TARGET_USER")
           password = os.environ.get("TARGET_PASS")
           port = int(os.environ.get("TARGET_PORT", 22))
-          server = os.environ.get("SYSLOG_SERVER")
+          dns1 = os.environ.get("DNS_1")
+          dns2 = os.environ.get("DNS_2")
+          syslog = os.environ.get("SYSLOG_SERVER")
 
           try:
               client.connect(
@@ -42,18 +46,31 @@
               channel = client.invoke_shell()
               time.sleep(1)
 
-              # Desativa paginacao, limpa e seta o novo loghost, salva com 'end'
               commands = [
+                  # 1. Desativar paginacao do console
                   "config system console",
                   "set output standard",
                   "end",
+
+                  # 2. Saneamento e configuracao de DNS
+                  "config system dns",
+                  "unset primary",
+                  "unset secondary",
+                  f"set primary {dns1}",
+                  f"set secondary {dns2}",
+                  "end",
+
+                  # 3. Configuracao do Syslog corporativo
                   "config log syslogd setting",
                   "set status enable",
-                  f"set server \"{server}\"",
+                  f"set server \"{syslog}\"",
                   "set mode udp",
                   "set port 514",
                   "set facility local7",
                   "end",
+
+                  # 4. Checagem das configuracoes aplicadas
+                  "show system dns",
                   "show log syslogd setting",
                   "exit"
               ]
@@ -76,13 +93,15 @@
               sys.exit(1)
       delegate_to: localhost
 
-    - name: 2. Aplicar configuracao de Syslog via SSH
-      ansible.builtin.command: python3 /tmp/executa_fortiswitch_logging.py
+    - name: 2. Aplicar configuracoes de DNS e Syslog via SSH
+      ansible.builtin.command: python3 /tmp/executa_fortiswitch_full.py
       environment:
         TARGET_HOST: "{{ inventory_hostname }}"
         TARGET_USER: "{{ ansible_user }}"
         TARGET_PASS: "{{ ansible_password }}"
         TARGET_PORT: "{{ ssh_port }}"
+        DNS_1: "{{ dns_primario }}"
+        DNS_2: "{{ dns_secundario }}"
         SYSLOG_SERVER: "{{ syslog_server }}"
       delegate_to: localhost
       register: resultado_fortiswitch
@@ -90,20 +109,20 @@
 
     - name: 3. Limpar script temporario
       ansible.builtin.file:
-        path: "/tmp/executa_fortiswitch_logging.py"
+        path: "/tmp/executa_fortiswitch_full.py"
         state: absent
       delegate_to: localhost
 
-    - name: 4. Registrar falhas sem abortar o lote
+    - name: 4. Registrar falha sem abortar a fila
       ansible.builtin.debug:
         msg:
           - "❌ FALHA NO FORTISWITCH {{ inventory_hostname }}"
           - "{{ resultado_fortiswitch.stderr_lines }}"
       when: resultado_fortiswitch.rc != 0
 
-    - name: 5. Exibir configuracao ativa resultante
+    - name: 5. Exibir configuracao ativa resultante (DNS e Syslog)
       ansible.builtin.debug:
         msg:
           - "FortiSwitch {{ inventory_hostname }} configurado e salvo com sucesso."
-          - "{{ resultado_fortiswitch.stdout_lines | select('search', 'server|status|facility') | list }}"
+          - "{{ resultado_fortiswitch.stdout_lines | select('search', 'primary|secondary|server|status|facility') | list }}"
       when: resultado_fortiswitch.rc == 0
